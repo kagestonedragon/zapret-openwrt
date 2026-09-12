@@ -64,6 +64,10 @@ endef
 
 ZAPRET_DIR := /opt/zapret
 
+# namespace for fake payloads imported from zapret-discord-youtube, kept separate so that
+# same-named files with different contents cannot shadow each other
+FAKE_NS := flowseal
+
 define ZAPRET_CONFFILES_LIST
 $(ZAPRET_DIR)/config
 $(ZAPRET_DIR)/ipset/zapret-hosts-google.txt
@@ -105,6 +109,14 @@ define Package/$(PKG_NAME)/install
 	$(CP)                ./files/* $(1)$(ZAPRET_DIR)/files/
 	$(INSTALL_DIR) $(1)$(ZAPRET_DIR)/ipset
 	$(CP) $(PKG_BUILD_DIR)/ipset/* $(1)$(ZAPRET_DIR)/ipset/
+	# Vendor host lists used by the converted presets.
+	# Package data, not conffiles: they must be refreshed on upgrade.
+	$(INSTALL_DATA) ./ipset/zapret-hosts-flowseal.txt         $(1)$(ZAPRET_DIR)/ipset/
+	$(INSTALL_DATA) ./ipset/zapret-hosts-flowseal-exclude.txt $(1)$(ZAPRET_DIR)/ipset/
+	# Strategy presets (converted offline by tools/flowseal2preset.py)
+	$(INSTALL_DIR) $(1)$(ZAPRET_DIR)/presets
+	$(CP) ./presets/*.conf $(1)$(ZAPRET_DIR)/presets/
+	$(INSTALL_DIR) $(1)$(ZAPRET_DIR)/presets/user
 	$(INSTALL_BIN)  $(PKG_BUILD_DIR)/blockcheck.sh  $(1)$(ZAPRET_DIR)/blockcheck.sh
 	$(INSTALL_DIR) $(1)$(ZAPRET_DIR)/tmp
 	$(INSTALL_DIR) $(1)$(ZAPRET_DIR)/init.d/openwrt
@@ -146,6 +158,8 @@ define Package/$(PKG_NAME)/install
 	$(CP) ./ipset/zapret*.txt  $(1)$(ZAPRET_DIR)/ipset_def/
 	# Fix permissions
 	chmod 644 $(1)$(ZAPRET_DIR)/ipset/*.txt
+	chmod 644 $(1)$(ZAPRET_DIR)/presets/*.conf
+	chmod 644 $(1)$(ZAPRET_DIR)/files/fake/$(FAKE_NS)/*.bin
 	chmod 644 $(1)$(ZAPRET_DIR)/ipset_def/*.txt
 	chmod 644 $(1)$(ZAPRET_DIR)/init.d/openwrt/custom.d/*.sh
 	chmod 644 $(1)$(ZAPRET_DIR)/config*

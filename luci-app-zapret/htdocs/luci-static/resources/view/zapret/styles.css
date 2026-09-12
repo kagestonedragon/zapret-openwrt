@@ -6,3 +6,28 @@ textarea, .cbi-value textarea
     pointer-events: auto !important;
     user-select: text !important;    
 }
+
+/* strategy preset dialog */
+.zp-row
+{
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 6px;
+}
+.zp-knob
+{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 3px 0;
+}
+.zp-knob > label
+{
+    min-width: 200px;
+}
+textarea.zp-readonly
+{
+    opacity: 0.85;
+}

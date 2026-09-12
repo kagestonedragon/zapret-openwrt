@@ -24,7 +24,9 @@ CRONTAB_FILE="/etc/crontabs/root"
 
 function adapt_for_sed
 {
-	echo -n "$1" | tr '\r' ' ' | tr '\n' ' ' | tr '\t' ' ' | sed -r 's/([\$\.\*\/\[\\^])/\\\1/g' | sed 's/[]]/\\]/g'
+	# NB: '&' must be escaped too - in a sed replacement it expands to the whole match,
+	# which would splice the old config line into the new value.
+	echo -n "$1" | tr '\r' ' ' | tr '\n' ' ' | tr '\t' ' ' | sed -r 's/([\$\.\*\/\[\\^&])/\\\1/g' | sed 's/[]]/\\]/g'
 }
 
 function is_valid_config

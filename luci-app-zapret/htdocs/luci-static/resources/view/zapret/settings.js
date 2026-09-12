@@ -6,6 +6,7 @@
 'require ui';
 'require view';
 'require view.zapret.tools as tools';
+'require view.zapret.presets as presets';
 
 document.head.appendChild(E('link', {
     rel: 'stylesheet',
@@ -215,6 +216,7 @@ return view.extend({
         }
         o.rmempty     = false;
         o.datatype    = 'string';
+        let opt_ports_tcp = o;
 
         if (tools.appName == 'zapret2') {
             o = s.taboption(tabname, form.Value, 'NFQWS2_PORTS_UDP', _('NFQWS2_PORTS_UDP'));
@@ -223,6 +225,7 @@ return view.extend({
         }
         o.rmempty     = false;
         o.datatype    = 'string';
+        let opt_ports_udp = o;
 
         if (tools.appName == 'zapret2') {
             o = s.taboption(tabname, form.Value, 'NFQWS2_TCP_PKT_OUT', _('NFQWS2_TCP_PKT_OUT'));
@@ -271,6 +274,80 @@ return view.extend({
         }
         o.rmempty     = false;
         o.datatype    = 'uinteger';
+
+        /* Strategy presets */
+
+        let OPT  = (tools.appName == 'zapret2') ? 'NFQWS2_OPT'       : 'NFQWS_OPT';
+        let PTCP = (tools.appName == 'zapret2') ? 'NFQWS2_PORTS_TCP' : 'NFQWS_PORTS_TCP';
+        let PUDP = (tools.appName == 'zapret2') ? 'NFQWS2_PORTS_UDP' : 'NFQWS_PORTS_UDP';
+
+        /* uci.set() behind a live widget's back is reverted on the next Save&Apply,
+           so every bound widget a preset touches has to be updated too */
+        let sync_widget = function(opt, value) {
+            try {
+                let el = opt.getUIElement('config');
+                if (el) {
+                    el.setValue(value);
+                }
+            } catch(e) {
+                console.error('zapret: cannot sync widget: ' + e.message);
+            }
+        };
+
+        /* the NFQWS_OPT editor is a readonly TextValue bound to the pseudo-option _NFQWS_OPT;
+           its DOM must match what cfgvalue() would return, not merely the trimmed text */
+        let sync_opt_display = function(value) {
+            try {
+                let text = value.trim();
+                text = text.replace(/\n  --/g, "\n--");
+                text = text.replace(/\n --/g, "\n--");
+                text = text.replace(/ --/g, "\n--");
+                let el = document.getElementById('widget.cbid.' + tools.appName + '.config._' + OPT);
+                if (el) {
+                    el.textContent = text;
+                }
+            } catch(e) {
+                console.error('zapret: cannot sync ' + OPT + ' display: ' + e.message);
+            }
+        };
+
+        let apply_preset = function(res) {
+            let value = '\n' + res.opt.trim() + '\n';
+            uci.set(tools.appName, 'config', OPT, value);
+            uci.set(tools.appName, 'config', PTCP, res.ports.tcp);
+            uci.set(tools.appName, 'config', PUDP, res.ports.udp);
+            uci.set(tools.appName, 'config', 'NFQWS_PRESET', res.id);
+            uci.set(tools.appName, 'config', 'GAME_FILTER', res.knobs.game);
+            uci.set(tools.appName, 'config', 'IPSET_MODE', res.knobs.ipset);
+            uci.set(tools.appName, 'config', 'FAKE_DISCORD_UDP', res.knobs.fakeDsc);
+            uci.set(tools.appName, 'config', 'FAKE_GAME_UDP', res.knobs.fakeGam);
+            sync_widget(opt_ports_tcp, res.ports.tcp);
+            sync_widget(opt_ports_udp, res.ports.udp);
+            sync_opt_display(value);
+            return uci.save().then(() => {
+                ui.addNotification(null, E('p',
+                    _('Preset "%s" applied. Press "Save & Apply" to activate it.').format(res.name)),
+                    'info');
+            });
+        };
+
+        add_delim(s);
+
+        o = s.taboption(tabname, form.DummyValue, '_preset_active', _('Active preset'));
+        o.rawhtml = true;
+        o.cfgvalue = function(section_id) {
+            let id = uci.get(tools.appName, section_id, 'NFQWS_PRESET');
+            return id ? '<code>' + id + '</code>' : '<em>' + _('not set') + '</em>';
+        };
+
+        o = s.taboption(tabname, form.Button, '_preset_btn', _('Strategy presets'));
+        o.inputtitle = _('Select');
+        o.inputstyle = 'edit btn';
+        o.description = _('Ready-made strategies converted from zapret-discord-youtube, and your own');
+        o.onclick = () => new presets.dialog({
+            ctx: presets,
+            onApply: apply_preset,
+        }).show();
 
         add_delim(s, tools.nfqws_opt_url);
         if (tools.appName == 'zapret2') {

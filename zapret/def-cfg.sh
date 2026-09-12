@@ -39,6 +39,12 @@ function set_cfg_reset_values
 		set $cfgname.config.NFQWS_UDP_PKT_IN='0'
 		set $cfgname.config.NFQWS_PORTS_TCP_KEEPALIVE='0'
 		set $cfgname.config.NFQWS_PORTS_UDP_KEEPALIVE='0'
+		# strategy preset options (consumed by the LuCI preset picker)
+		# NFQWS_PRESET is intentionally left unset: absent means "no preset applied"
+		set $cfgname.config.GAME_FILTER='off'
+		set $cfgname.config.IPSET_MODE='none'
+		set $cfgname.config.FAKE_DISCORD_UDP='quic_initial_steamcommunity_com.bin'
+		set $cfgname.config.FAKE_GAME_UDP='quic_initial_4pda_to.bin'
 		# save changes
 		commit $cfgname
 	EOF

@@ -6,6 +6,7 @@
 . /opt/zapret/comfunc.sh
 
 mkdir -p $ZAPRET_BASE/ipset
+mkdir -p $ZAPRET_BASE/presets/user
 
 # create empty txt files into ipset directory
 [ ! -f "$ZAPRET_BASE/ipset/zapret-hosts-google.txt"     ] && touch "$ZAPRET_BASE/ipset/zapret-hosts-google.txt"
