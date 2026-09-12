@@ -1,0 +1,130 @@
+name: build-dev
+
+# Builds the packages from THIS checkout for a single architecture and uploads them as
+# an artifact. Unlike the release workflow (build.yml), which always checks out
+# remittor/zapret-openwrt, this one builds the branch it is run from - which is what you
+# want when testing your own changes.
+#
+# Run it from the Actions tab: "build-dev" -> "Run workflow" -> pick the branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Target architecture'
+        required: true
+        default: 'aarch64_cortex-a53'
+        type: string
+      branch:
+        description: 'OpenWrt SDK version (v24.10.x builds ipk, v25.12.x builds apk)'
+        required: true
+        default: 'v24.10.5'
+        type: string
+
+env:
+  REPO_NAME: zapret-openwrt
+  PKGDIR: ${{ github.workspace }}/zapret-openwrt
+  SDKDIR: /builder
+
+jobs:
+  build:
+    name: "${{ inputs.branch }}: ${{ inputs.arch }}"
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/openwrt/sdk:${{ inputs.arch }}-${{ inputs.branch }}
+      options: --user root
+
+    steps:
+      - name: Checkout this branch
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.REPO_NAME }}
+
+      - name: Fix SDK paths
+        run: |
+          mkdir -p $SDKDIR/shared-workdir
+          rm -rf $SDKDIR/shared-workdir/build
+          ln -sf $SDKDIR $SDKDIR/shared-workdir/build
+
+      - name: Prepare packages
+        working-directory: ${{ env.SDKDIR }}
+        run: |
+          MKFN=$( ls -1 $PKGDIR/luci-app-zapret*/Makefile )
+          PKGVER=$( grep -s '^PKG_VERSION:=.*' $MKFN | cut -d'=' -f2 )
+          PKGREL=$( grep -s '^PKG_RELEASE:=.*' $MKFN | cut -d'=' -f2 )
+          [ "$PKGREL" != "1" ] && PKGVER=$PKGVER-r$PKGREL
+          echo "PKG_VERSION = $PKGVER"
+          echo "PKGVER=$PKGVER" >> $GITHUB_ENV
+          cp -vr $PKGDIR ./package/$REPO_NAME/ >/dev/null
+          echo "presets copied: $( ls -1 ./package/$REPO_NAME/zapret/presets/*.conf | wc -l )"
+
+      - name: Init feeds
+        working-directory: ${{ env.SDKDIR }}
+        run: |
+          mv feeds.conf.default feeds.conf
+          sed -i -e 's|base.*\.git|base https://github.com/openwrt/openwrt.git|' feeds.conf
+          sed -i -e 's|packages.*\.git|packages https://github.com/openwrt/packages.git|' feeds.conf
+          sed -i -e 's|luci.*\.git|luci https://github.com/openwrt/luci.git|' feeds.conf
+          ./scripts/feeds update base packages luci
+          ./scripts/feeds install -a
+
+      - name: Init config
+        working-directory: ${{ env.SDKDIR }}
+        run: |
+          make defconfig
+          # keep the LuCI sources readable in the package - makes on-router debugging sane
+          sed -i 's/CONFIG_LUCI_JSMIN=y/CONFIG_LUCI_JSMIN=n/g' .config
+          sed -i 's/CONFIG_LUCI_CSSTIDY=y/CONFIG_LUCI_CSSTIDY=n/g' .config
+          grep -q '^CONFIG_LUCI_CSSTIDY=' .config || echo 'CONFIG_LUCI_CSSTIDY=n' >> .config
+
+      - name: Build packages
+        working-directory: ${{ env.SDKDIR }}
+        run: |
+          make package/$REPO_NAME/zapret/compile \
+               package/$REPO_NAME/luci-app-zapret/compile \
+               -j$(nproc) || {
+            echo "::group::verbose retry"
+            make package/$REPO_NAME/zapret/compile \
+                 package/$REPO_NAME/luci-app-zapret/compile V=sc
+            echo "::endgroup::"
+            exit 1
+          }
+
+      - name: Collect packages
+        working-directory: ${{ env.SDKDIR }}
+        run: |
+          OUTDIR=$GITHUB_WORKSPACE/out
+          mkdir -p $OUTDIR
+          find ./bin/packages/*/base -type f -regex ".*zapret.*\.[ai]pk$" -exec cp -v {} $OUTDIR/ \;
+          echo "--- built ---"
+          ls -lh $OUTDIR
+
+      - name: Verify the preset files made it into the package
+        run: |
+          OUTDIR=$GITHUB_WORKSPACE/out
+          PKG=$( ls -1 $OUTDIR/zapret_*.ipk $OUTDIR/zapret_*.apk 2>/dev/null | head -n1 )
+          [ -n "$PKG" ] || { echo "no zapret package produced"; exit 1; }
+          echo "inspecting $PKG"
+          rm -rf /tmp/x && mkdir -p /tmp/x
+          tar -xzf "$PKG" -C /tmp/x
+          if [ -f /tmp/x/data.tar.gz ]; then
+              tar -tzf /tmp/x/data.tar.gz > /tmp/list.txt      # ipk
+          else
+              find /tmp/x -type f > /tmp/list.txt              # apk
+          fi
+          echo "presets in package : $( grep -c 'opt/zapret/presets/.*\.conf' /tmp/list.txt || true )"
+          echo "payloads in package: $( grep -c 'opt/zapret/files/fake/flowseal/.*\.bin' /tmp/list.txt || true )"
+          for want in \
+              'opt/zapret/presets/general\.conf' \
+              'opt/zapret/files/fake/flowseal/stun\.bin' \
+              'opt/zapret/ipset/zapret-hosts-flowseal\.txt'; do
+              grep -q "$want" /tmp/list.txt || { echo "FAIL: $want missing from the package"; exit 1; }
+          done
+          echo OK
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: zapret-${{ inputs.arch }}-${{ inputs.branch }}
+          path: ${{ github.workspace }}/out/*
+          if-no-files-found: error
