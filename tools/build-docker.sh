@@ -41,8 +41,7 @@ done
 REPO=$(cd "$(dirname "$0")/.." 2>/dev/null || exit 1; pwd)
 [ -n "$OUT" ] || OUT="$REPO/out"
 IMAGE="ghcr.io/openwrt/sdk:$ARCH-$BRANCH"
-VOL_DL="zapret-sdk-dl-$BRANCH"
-VOL_FEEDS="zapret-sdk-feeds-$ARCH-$BRANCH"
+VOL_SDK="zapret-sdk-$ARCH-$BRANCH"
 
 # ---------------------------------------------------------------- preflight
 
@@ -69,7 +68,7 @@ fi
 
 if [ "$CLEAN" = "1" ]; then
 	echo "==> removing cached volumes"
-	docker volume rm -f "$VOL_DL" "$VOL_FEEDS" >/dev/null 2>&1 || true
+	docker volume rm -f "$VOL_SDK" >/dev/null 2>&1 || true
 fi
 
 PLATFORM=
@@ -82,6 +81,30 @@ esac
 
 mkdir -p "$OUT"
 
+# colima/lima hand containers a gateway resolver that sometimes NXDOMAINs every name.
+# The feed clones are the first thing that needs DNS, and scripts/feeds swallows the
+# failure, so probe it here instead of discovering it 10 minutes into the build.
+echo "==> checking container DNS"
+DNSOPT=
+if docker run --rm $PLATFORM "$IMAGE" sh -c 'getent hosts github.com >/dev/null 2>&1'; then
+	echo "    ok"
+else
+	DNSOPT="--dns 1.1.1.1 --dns 8.8.8.8"
+	if docker run --rm $PLATFORM $DNSOPT "$IMAGE" sh -c 'getent hosts github.com >/dev/null 2>&1'; then
+		echo "    default resolver is broken, using 1.1.1.1 / 8.8.8.8 for this build"
+		echo "    (to fix it for good: colima stop && colima start --dns 1.1.1.1)"
+	else
+		cat >&2 <<'EOF'
+error: containers cannot resolve github.com at all.
+       Check the network / VPN on the host, then restart the VM with a working resolver:
+
+           colima stop && colima start --dns 1.1.1.1
+
+EOF
+		exit 1
+	fi
+fi
+
 echo "==> image  : $IMAGE"
 echo "==> source : $REPO (working tree)"
 echo "==> output : $OUT"
@@ -92,11 +115,10 @@ MAKE_V=
 [ "$VERBOSE" = "1" ] && MAKE_V="V=sc"
 
 # shellcheck disable=SC2086
-docker run --rm -i $PLATFORM --user root \
+docker run --rm -i $PLATFORM $DNSOPT --user root \
 	-v "$REPO":/src:ro \
 	-v "$OUT":/out \
-	-v "$VOL_DL":/builder/dl \
-	-v "$VOL_FEEDS":/builder/feeds \
+	-v "$VOL_SDK":/builder \
 	-e MAKE_V="$MAKE_V" \
 	"$IMAGE" sh -s <<'INNER'
 set -e
@@ -119,12 +141,23 @@ echo "    presets: $( ls -1 ./package/$REPO_NAME/zapret/presets/*.conf 2>/dev/nu
 echo "    payloads: $( ls -1 ./package/$REPO_NAME/zapret/files/fake/flowseal/*.bin 2>/dev/null | wc -l )"
 
 echo "==> feeds"
+if [ -d feeds/base ] && [ -d feeds/packages ] && [ -d feeds/luci ]; then
+	echo "    already present, skipping update"
+else
 [ -f feeds.conf ] || mv feeds.conf.default feeds.conf
 sed -i -e 's|base.*\.git|base https://github.com/openwrt/openwrt.git|' feeds.conf
 sed -i -e 's|packages.*\.git|packages https://github.com/openwrt/packages.git|' feeds.conf
 sed -i -e 's|luci.*\.git|luci https://github.com/openwrt/luci.git|' feeds.conf
 ./scripts/feeds update base packages luci
+for f in base packages luci; do
+	[ -d "feeds/$f" ] || {
+		echo "FAIL: feed '$f' was not fetched - the container could not reach github.com."
+		echo "      scripts/feeds reports success even when every clone fails, hence this check."
+		exit 1
+	}
+done
 ./scripts/feeds install -a
+fi
 
 echo "==> config"
 make defconfig
@@ -134,9 +167,14 @@ sed -i 's/CONFIG_LUCI_CSSTIDY=y/CONFIG_LUCI_CSSTIDY=n/g' .config
 grep -q '^CONFIG_LUCI_CSSTIDY=' .config || echo 'CONFIG_LUCI_CSSTIDY=n' >> .config
 
 echo "==> compiling"
-make package/$REPO_NAME/zapret/compile \
-     package/$REPO_NAME/luci-app-zapret/compile \
-     -j"$(nproc)" $MAKE_V
+if ! make package/$REPO_NAME/zapret/compile \
+        package/$REPO_NAME/luci-app-zapret/compile \
+        -j"$(nproc)" $MAKE_V; then
+	echo
+	echo "==> parallel build failed; retrying single-threaded to surface the real error"
+	make package/$REPO_NAME/zapret/compile -j1 V=s 2>&1 | tail -n 150
+	exit 1
+fi
 
 echo "==> collecting"
 rm -f /out/*.ipk /out/*.apk
