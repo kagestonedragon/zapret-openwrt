@@ -56,6 +56,32 @@ CI job would run.
   because `/opt/zapret/config` is sourced as root and rewritten with `sed`, and
   `is_valid_config` does not catch the resulting corruption.
 
+## build-docker.sh
+
+Builds `zapret` and `luci-app-zapret` locally in the official OpenWrt SDK container.
+Builds the **working tree**, so uncommitted changes are included.
+
+```sh
+./tools/build-docker.sh                                  # aarch64_cortex-a53, ipk (24.10)
+./tools/build-docker.sh --arch x86_64 --branch v23.05.5
+./tools/build-docker.sh --clean                          # drop the cached feeds/downloads
+```
+
+The SDK branch decides the package format and must match the release on the router:
+`v23.05.x` and `v24.10.x` produce **ipk**, `v25.12.x` and `SNAPSHOT` produce **apk**.
+Packages land in `out/`.
+
+Feeds and downloads are cached in named Docker volumes (`zapret-sdk-dl-*`,
+`zapret-sdk-feeds-*`), so only the first build pays for cloning the feeds.
+
+After building, the script unpacks the result and fails if the presets, the fake payloads
+or the vendor host lists did not make it in — a broken install rule should not produce a
+package that merely looks fine.
+
+`.github/workflows/build-dev.yml` runs the same thing on GitHub Actions when you would
+rather not build locally. (The release workflow, `build.yml`, always checks out
+`remittor/zapret-openwrt`, so it cannot build your branch.)
+
 ## test-presets.js
 
 Offline tests for the rendering logic in
