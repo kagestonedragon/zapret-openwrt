@@ -129,19 +129,6 @@ return baseclass.extend({
         });
     },
 
-    getStratList: function() {
-        let exec_cmd = '/bin/busybox';
-        let exec_arg = [ 'awk', '-F', '"', '/if \\[ "\\$strat" = "/ {print $4}', this.defCfgPath ];
-        return fs.exec(exec_cmd, exec_arg).then(res => {
-            if (res.code == 0) {
-                return this.getWordsArray(res.stdout);
-            }
-            return [ ];
-        }).catch(e => {
-            ui.addNotification(null, E('p', _('Failed to get strat list: %s').format(e)));
-        });
-    },
-
     handleServiceAction: function(name, action, throwed = false)
     {
         console.log('handleServiceAction: '+name+' '+action);
@@ -167,12 +154,6 @@ return baseclass.extend({
             if (action == 'start' || action == 'restart') {
                 exec_cmd = this.syncCfgPath;
                 errmsg = _('Unable to run sync_config.sh script.');
-            }
-            if (action == 'reset') {
-                exec_cmd = this.defaultCfgPath;
-                exec_arg = args;  // (reset_ipset)(sync) ==> restore all configs + sync config
-                errmsg = _('Unable to run restore-def-cfg.sh script.');
-                action = null;
             }
             if (exec_cmd) {
                 let res = await fs.exec(exec_cmd, exec_arg);
@@ -419,7 +400,7 @@ return baseclass.extend({
         return result;
     },
 
-    makeStatusString: function(svcinfo, pkg_arch, bllist_preset) {
+    makeStatusString: function(svcinfo, version, bllist_preset) {
         let svc_autorun = _('Unknown');
         let svc_daemons = _('Unknown');
         
@@ -438,10 +419,10 @@ return baseclass.extend({
                 <table class="table">
                     <tr class="tr">
                         <td class="td left" ${td_name_style}>
-                            ${_('CPU architecture')}:
+                            ${_('Version')}:
                         </td>
                         <td class="td left">
-                            ${pkg_arch}
+                            ${version}
                         </td>
                     </tr>
                     <tr class="tr">

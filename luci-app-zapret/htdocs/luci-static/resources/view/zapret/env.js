@@ -8,8 +8,6 @@ return baseclass.extend({
     execPath          : '/etc/init.d/zapret',
     appDir            : '/opt/zapret',
     syncCfgPath       : '/opt/zapret/sync_config.sh',
-    defCfgPath        : '/opt/zapret/def-cfg.sh',
-    defaultCfgPath    : '/opt/zapret/restore-def-cfg.sh',
 
     hostsGoogleFN     : '/opt/zapret/ipset/zapret-hosts-google.txt',
     hostsUserFN       : '/opt/zapret/ipset/zapret-hosts-user.txt',

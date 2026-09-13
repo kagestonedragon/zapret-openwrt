@@ -6,7 +6,6 @@
 'require view';
 'require view.zapret.tools as tools';
 'require view.zapret.diagnost as diagnost';
-'require view.zapret.updater as updater';
 
 const btn_style_neutral  = 'btn';
 const btn_style_action   = 'btn cbi-button-action';
@@ -25,25 +24,17 @@ return view.extend({
             "start"   : elems.btn_start   || document.getElementById('btn_start'),
             "restart" : elems.btn_restart || document.getElementById('btn_restart'),
             "stop"    : elems.btn_stop    || document.getElementById('btn_stop'),
-            "reset"   : elems.btn_reset   || document.getElementById('btn_reset'),
             "diag"    : elems.btn_diag    || document.getElementById('btn_diag'),
-            "update"  : elems.btn_update  || document.getElementById('btn_update'),
         };
     },
     
     disableButtons: function(flag, button, elems = { }) {
-        let error_code = 0;
-        if (Number.isInteger(button) && button < 0) {
-            error_code = button;
-        }
         let btn = this.get_svc_buttons(elems);
         btn.enable.disabled  = flag;
         btn.disable.disabled = flag;
         btn.start.disabled   = flag;
         btn.restart.disabled = flag;
         btn.stop.disabled    = flag;
-        btn.reset.disabled   = (error_code == 0) ? flag : false;
-        btn.update.disabled  = (error_code == 0) ? flag : false;
     },
 
     getAppStatus: function()
@@ -54,7 +45,6 @@ return view.extend({
             svc_info   : tools.getSvcInfo(),
             proc_list  : fs.exec('/bin/busybox', [ 'ps' ]),
             pkg_dict   : tools.getPackageDict(),
-            strat_list : tools.getStratList(),
             sys_info   : fs.exec('/bin/cat', [ '/etc/openwrt_release' ]),
             uci_data   : uci.load(tools.appName),
         }).catch(e => {
@@ -63,6 +53,17 @@ return view.extend({
                     e.message, tools.execPath, 'tools.getInitState', 'uci.'+tools.appName
             )));
         });
+    },
+
+    getVersionString: function(pkgdict)
+    {
+        let version = pkgdict[tools.appName];
+        let luci_version = pkgdict['luci-app-' + tools.appName];
+        let out = (version) ? 'v' + version.replace(/-r1$/, '') : _('Unknown');
+        if (version != luci_version) {
+            out += '<div class="label-status error">LuCI APP v' + luci_version + ' [ incorrect version! ]</div>';
+        }
+        return out;
     },
 
     setAppStatus: function(data, elems = { }, force_app_status = 0)
@@ -77,7 +78,6 @@ return view.extend({
             return;
         }
         let svc_boot = data.svc_boot ? true : false;
-        this.nfqws_strat_list = data.strat_list;
         this.pkg_arch = tools.getConfigPar(data.sys_info.stdout, 'DISTRIB_ARCH', 'unknown');
         //console.log('svc_en: ' + data.svc_en.code + '  poll.running = ' + this.POLL.running);
         let svc_en = (data.svc_en.code == 0) ? true : false;
@@ -104,8 +104,6 @@ return view.extend({
             svcinfo = tools.decode_svc_info(svc_en, data.svc_info, data.proc_list, cfg);
         }
         let btn = this.get_svc_buttons(elems);
-        btn.reset.disabled = false;
-        btn.update.disabled = false;
 
         if (Number.isInteger(svcinfo)) {
             ui.addNotification(null, E('p', _('Error')
@@ -125,7 +123,7 @@ return view.extend({
             }
         }
         let elem_status = elems.status || document.getElementById("status");
-        elem_status.innerHTML = tools.makeStatusString(svcinfo, this.pkg_arch, '');
+        elem_status.innerHTML = tools.makeStatusString(svcinfo, this.getVersionString(data.pkg_dict), '');
         this.POLL.running = false;
     },
 
@@ -135,9 +133,6 @@ return view.extend({
         if (btn?.create_args) {
             args = btn.create_args();
             console.log('serviceActionEx: btn.args = '+JSON.stringify(args));
-        }
-        if (action == 'reset') {
-            hide_modal = true;
         }
         await this.POLL.stopAndWait();
         this.disableButtons(true, btn);
@@ -182,115 +177,6 @@ return view.extend({
         this.getAppStatus().then(
             L.bind(this.setAppStatus, this)
         );
-    },
-
-    dialogResetCfg: function(ev)
-    {
-        if (tools.checkUnsavedChanges()) {
-            ui.addNotification(null, E('p', _('You have unapplied changes')));
-            return;
-        }
-        ev.target.blur();
-
-        let reset_base = E('label', [
-            E('input', { type: 'checkbox', id: 'cfg_reset_base',  checked: true }),
-            ' ', _('Restore all base settings')
-        ]);
-        
-        let reset_ipset = E('label', [
-            E('input', { type: 'checkbox', id: 'cfg_reset_ipset',  checked: true }),
-            ' ', _('Restore ipset configs')
-        ]);
-
-        let set_autohostlist = E('label', [
-            E('input', { type: 'checkbox', id: 'cfg_autohostlist',  checked: true }),
-            ' ', _('Set AutoHostList mode')
-        ]);
-
-        let erase_autohostlist = E('label', [
-            E('input', { type: 'checkbox', id: 'cfg_erase_autohostlist' }),
-            ' ', _('Erase AutoHostList (ipset)')
-        ]);
-
-        let enable_custom_d = E('label', [
-            E('input', { type: 'checkbox', id: 'cfg_enable_custom_d' }),
-            ' ', _('Enable use  custom.d scripts')
-        ]);
-
-        let strat_list = [ ];
-        strat_list.push( E('option', { value: 'strat__skip__' }, [ 'not change' ] ) );
-        for (let id = 0; id < this.nfqws_strat_list.length; id++) {
-            let strat = '' + this.nfqws_strat_list[id];
-            strat_list.push( E('option', { value: 'strat_' + id }, [ strat ] ) );
-        }
-        let label_nfqws = (tools.appName == 'zapret2') ? _('NFQWS2_OPT strategy: ') : _('NFQWS_OPT strategy: ');
-        let nfqws_strat = E('label', [
-            label_nfqws,
-            E('select', { id: 'cfg_nfqws_strat' }, strat_list)
-        ]);
-
-        let cancel_button = E('button', {
-            'class': btn_style_neutral,
-            'click': ui.hideModal,
-            'class': btn_style_warning,
-        }, _('Cancel'));
-
-        let resetcfg_btn = E('button', {
-            'id': 'resetcfg_btn',
-            'name': 'resetcfg_btn',
-            'class': btn_style_action,
-        }, _('Reset settings'));
-        resetcfg_btn.create_args = () => {
-            let opt_flags = '';
-            if (document.getElementById('cfg_reset_base').checked == false) {
-                opt_flags += '(skip_base)';
-            };
-            if (document.getElementById('cfg_reset_ipset').checked) {
-                opt_flags += '(reset_ipset)';
-            };
-            if (document.getElementById('cfg_autohostlist').checked) {
-                opt_flags += '(set_mode_autohostlist)';
-            };
-            if (document.getElementById('cfg_erase_autohostlist').checked) {
-                opt_flags += '(erase_autohostlist)';
-            };
-            if (document.getElementById('cfg_enable_custom_d').checked) {
-                opt_flags += '(enable_custom_d)';
-            };
-            let sel_strat = document.getElementById('cfg_nfqws_strat');
-            let opt_strat = sel_strat.options[sel_strat.selectedIndex].text;
-            if (opt_strat == 'not change') {
-                opt_strat = '-';
-            }
-            opt_flags += '(sync)';
-            return [ opt_flags, opt_strat ];
-        };
-        resetcfg_btn.onclick = this.createServiceHandlerFn('reset', 'resetcfg_btn');
-
-        ui.showModal(_('Reset settings to default'), [
-            E('div', { 'class': 'cbi-section' }, [
-                reset_base,
-                E('br'), E('br'),
-                reset_ipset,
-                E('br'), E('br'),
-                set_autohostlist,
-                E('br'), E('br'),
-                erase_autohostlist,
-                E('br'), E('br'),
-                enable_custom_d,
-                E('br'), E('br'),
-                nfqws_strat,
-                E('br'), E('br')
-            ]),
-            E('div', { 'style': 'display:flex; justify-content:space-between; align-items:center; margin-top:1px;' }, [
-                E('div', { 'class': 'left' }, [
-                    resetcfg_btn,
-                ]),
-                E('div', { 'class': 'right' }, [
-                    cancel_button,
-                ]),
-            ]),
-        ]);
     },
 
     load: function()
@@ -370,17 +256,9 @@ return view.extend({
         btn_stop.onclick    = this.createServiceHandlerFn('stop', 'btn_stop');
         layout_append(_('Service daemons control'), null, [ btn_start, btn_restart, btn_stop ] );
 
-        let btn_reset       = create_btn('btn_reset', btn_style_action, _('Reset settings'));
-        btn_reset.onclick   = L.bind(this.dialogResetCfg, this);
-        layout_append(_('Reset settings to default'), null, [ btn_reset ] );
-
         let btn_diag        = create_btn('btn_diag',  btn_style_action, _('Diagnostics'));
         btn_diag.onclick    = ui.createHandlerFn(this, () => { diagnost.openDiagnostDialog(this.pkg_arch) });
         layout_append('Diagnostic tools', null, [ btn_diag ] );
-
-        let btn_update      = create_btn('btn_update',  btn_style_action, _('Upgrade…'));
-        btn_update.onclick  = ui.createHandlerFn(this, () => { updater.openUpdateDialog(this.pkg_arch) });
-        layout_append(_('Upgrading the package'), null, [ btn_update ] );
 
         let elems = {
             "status": status_string,
@@ -389,45 +267,15 @@ return view.extend({
             "btn_start": btn_start,
             "btn_restart": btn_restart,
             "btn_stop": btn_stop,
-            "btn_reset": btn_reset,
             "btn_diag": btn_diag,
-            "btn_update": btn_update,
         };
         this.setAppStatus(data, elems);
 
         this.POLL.mode = 1;
         this.POLL.init( L.bind(this.statusPoll, this), 2000 );  // interval 2 sec
         this.POLL.start(500);  // first step after 500 ms
-
-        let page_title = tools.AppName;
-        page_title += ' &nbsp ';
-        if (pkgdict[tools.appName] === undefined || pkgdict[tools.appName] == '') {
-            page_title += 'unknown version';
-        } else {
-            page_title += 'v' + pkgdict[tools.appName];
-            page_title = page_title.replace(/-r1$/, '');
-        }
-        let aux1 = E('em');
-        let aux2 = E('em');
-        if (pkgdict[tools.appName] != pkgdict['luci-app-'+tools.appName]) {
-            let errtxt = 'LuCI APP v' + pkgdict['luci-app-'+tools.appName] + ' [ incorrect version! ]';
-            aux1 = E('div', { 'class': 'label-status error' }, errtxt);
-            aux2 = E('div', { }, '&nbsp');
-        }
         
-        let url1 = 'https://github.com/bol-van/'+tools.appName;
-        let url2 = 'https://github.com/remittor/zapret-openwrt';
-
         return E([
-            E('h2', { 'class': 'fade-in' }, page_title),
-            aux1,
-            aux2,
-            E('div', { 'class': 'cbi-section-descr fade-in' },
-                E('a', { 'href': url1, 'target': '_blank' }, url1),
-            ),
-            E('div', { 'class': 'cbi-section-descr fade-in' },
-                E('a', { 'href': url2, 'target': '_blank' }, url2),
-            ),
             E('div', { 'class': 'cbi-section fade-in' }, [
                 status_string,
             ]),
