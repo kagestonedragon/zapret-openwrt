@@ -353,7 +353,7 @@ return view.extend({
         s.addremove = true;
         s.sortable = false;
         s.nodescriptions = true;
-        s.addbtntitle = _('Add empty list');
+        s.addbtntitle = _('Add list');
         s.modaltitle = function(section_id) {
             return _('List') + ' \u00bb ' + (uci.get(tools.appName, section_id, 'name') || section_id);
         };
