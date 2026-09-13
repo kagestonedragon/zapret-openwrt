@@ -190,7 +190,7 @@ return view.extend({
 
         let m, s, o;
 
-        m = new form.Map(tools.appName, tools.AppName + ' - ' + _('Remote lists'));
+        m = new form.Map(tools.appName, tools.AppName + ' - ' + _('Host Lists'));
 
         /* ----------------------- lists toolbar --------------------------- */
 
@@ -198,22 +198,6 @@ return view.extend({
         s.anonymous = true;
         s.addremove = false;
         s.title = _('Remote lists');
-
-        o = s.option(form.Value, tools.listCronParam, _('Auto-update schedule'));
-        o.placeholder = tools.listCronDefault;
-        o.value('30 5 * * *',   _('Every day at 05:30'));
-        o.value('30 5 * * 1',   _('Every Monday at 05:30'));
-        o.value('30 */6 * * *', _('Every 6 hours'));
-        o.rmempty = true;
-        o.validate = function(section_id, value) {
-            if (!value || value.length == 0) {
-                return true;
-            }
-            if (!cron_re.test(value.trim())) {
-                return _('Expected 5 cron fields, for example') + ': 30 5 * * *';
-            }
-            return true;
-        };
 
         o = s.option(form.Button, '_catalog_btn', _('Repository lists'),
                      _('Add ready-made lists from the Flowseal/zapret-discord-youtube repository.'));
@@ -236,6 +220,22 @@ return view.extend({
             }
             return this.openUpdateDialog([ '-a' ], _('Update all lists'));
         }, this);
+
+        o = s.option(form.Value, tools.listCronParam, _('Auto-update schedule'));
+        o.placeholder = tools.listCronDefault;
+        o.value('30 5 * * *',   _('Every day at 05:30'));
+        o.value('30 5 * * 1',   _('Every Monday at 05:30'));
+        o.value('30 */6 * * *', _('Every 6 hours'));
+        o.rmempty = true;
+        o.validate = function(section_id, value) {
+            if (!value || value.length == 0) {
+                return true;
+            }
+            if (!cron_re.test(value.trim())) {
+                return _('Expected 5 cron fields, for example') + ': 30 5 * * *';
+            }
+            return true;
+        };
 
         /* -------------------------- user lists --------------------------- */
 
@@ -282,7 +282,7 @@ return view.extend({
             return dup ? _('This file name is already used by another list') : true;
         };
 
-        o = s.option(form.Value, 'url', _('Source URL'),
+        o = s.option(form.Value, 'url', _('Repository'),
                      _('Leave empty for a local list that is edited by hand.'));
         o.modalonly = true;
         o.rmempty = true;
@@ -302,6 +302,9 @@ return view.extend({
         o.modalonly = true;
         o.rmempty = false;
         o.default = '0';
+        /* nothing to refresh without a source, and the dependency is re-evaluated live,
+           so clearing the repository drops the flag on save as well */
+        o.depends('url', /^https?:\/\/\S+$/);
 
         o = s.option(form.Button, '_edit_btn', _('Content'));
         o.editable = true;
