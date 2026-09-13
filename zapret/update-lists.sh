@@ -126,14 +126,13 @@ function check_content
 function download_list
 {
 	local sec="$1"
-	local name file url type enabled autoupdate
+	local name file url type autoupdate
 	local dst tmp status rc sz lines
 
 	config_get name       "$sec" name       "$sec"
 	config_get file       "$sec" file       ""
 	config_get url        "$sec" url        ""
 	config_get type       "$sec" type       "hostlist"
-	config_get_bool enabled    "$sec" enabled    1
 	config_get_bool autoupdate "$sec" autoupdate 0
 
 	[ -n "$opt_section" ] && [ "$opt_section" != "$sec" ] && return 0
@@ -142,10 +141,6 @@ function download_list
 	ZAP_TOTAL=$(( ZAP_TOTAL + 1 ))
 	echo "--- $name [$sec]"
 
-	if [ "$enabled" != "1" ]; then
-		echo "  SKIP: list is disabled"
-		return 0
-	fi
 	if ! check_fname "$file"; then
 		echo "  ERROR: incorrect file name: '$file'"
 		ZAP_FAILED=$(( ZAP_FAILED + 1 ))
@@ -204,11 +199,10 @@ function download_list
 function count_autoupdate
 {
 	local sec="$1"
-	local enabled autoupdate url
+	local autoupdate url
 	config_get url "$sec" url ""
-	config_get_bool enabled    "$sec" enabled    1
 	config_get_bool autoupdate "$sec" autoupdate 0
-	[ "$enabled" = "1" ] && [ "$autoupdate" = "1" ] && [ -n "$url" ] && ZAP_AUTO_CNT=$(( ZAP_AUTO_CNT + 1 ))
+	[ "$autoupdate" = "1" ] && [ -n "$url" ] && ZAP_AUTO_CNT=$(( ZAP_AUTO_CNT + 1 ))
 	return 0
 }
 
@@ -261,7 +255,7 @@ fi
 
 if [ -z "$opt_all" ] && [ -z "$opt_section" ]; then
 	echo "Usage: update-lists.sh [-a] [-c] [-s <section>] [-S]"
-	echo "  -a            update all enabled lists"
+	echo "  -a            update all lists"
 	echo "  -c            update lists marked for auto-update (cron mode)"
 	echo "  -s <section>  update single list"
 	echo "  -S            sync cron task with current config"
