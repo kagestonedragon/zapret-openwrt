@@ -1,5 +1,6 @@
 'use strict';
 'require view';
+'require dom';
 'require fs';
 'require form';
 'require poll';
@@ -22,21 +23,10 @@ return view.extend({
                 ui.addNotification(null, E('p', _('Unable to get log files') + '(code = ' + log_data.code + ') : retrieveLog()'));
                 return null;
             }
-            var reason = '';
-            var uci_cfg = uci.get(tools.appName, 'config');
-            if (uci_cfg !== null && typeof(uci_cfg) === 'object') {
-                let flag = uci_cfg.DAEMON_LOG_ENABLE;
-                if (flag != '1') {
-                    reason = ' (Reason: option DAEMON_LOG_ENABLE = ' + flag + ')';
-                }
-            }
             if (typeof(log_data.stdout) !== 'string') {
-                return 'Log files not found.' + reason;
+                return [ ];
             }
             var log_list = log_data.stdout.trim().split('\n');
-            if (log_list.length <= 0) {
-                return 'Log files not found!' + reason;
-            }
             for (let i = 0; i < log_list.length; i++) {
                 let logfn = log_list[i].trim();
                 if (logfn.startsWith('/tmp/') && logfn.endsWith('+main.log')) {
@@ -84,34 +74,21 @@ return view.extend({
 
     pollLog: async function()
     {
-        let logdate_len = -2;
-        let logdata;
-        for (let txt_id = 0; txt_id < 10; txt_id++) {
-            let elem = document.getElementById('dmnlog_' + txt_id);
-            if (!elem)
-                break;
-            if (logdate_len == -2) {
-                logdata = await this.retrieveLog();
-                logdate_len = (Array.isArray(logdata)) ? logdata.length : -1;
-            }
-            let elem_name = elem.getAttribute("name");
-            let found = false;
-            if (logdate_len > 0) {
-                for (let log_num = 0; log_num < logdate_len; log_num++) {
-                    if (logdata[log_num].filename == elem_name) {
-                        if (logdata[log_num].data) {
-                            elem.value = logdata[log_num].data;
-                            elem.rows  = logdata[log_num].rows;
-                            found = true;
-                            //console.log('POLL: updated ' + elem_name);
-                        }
-                        break;
-                    }
-                }
-            }
-            if (!found) {
-                elem.value = '';
-                elem.rows  = 0;
+        let logdata = await this.retrieveLog();
+        if (!Array.isArray(logdata)) {
+            return;
+        }
+        /* a restart deletes the log files and the daemons create new ones only when
+           logging is enabled, so the set of files can change while the page is open */
+        if (logdata.map(log => log.filename).join('\n') != this.log_names) {
+            this.renderLogs(logdata);
+            return;
+        }
+        for (let log_num = 0; log_num < logdata.length; log_num++) {
+            let elem = document.getElementById('dmnlog_' + log_num);
+            if (elem) {
+                elem.value = logdata[log_num].data || '';
+                elem.rows  = logdata[log_num].rows;
             }
         }
     },
@@ -125,20 +102,9 @@ return view.extend({
         });
     },
     
-    render: function(logdata)
+    renderLogs: function(logdata)
     {
-        if (typeof(logdata) === 'string') {
-            return E('div', {}, [
-                E('p', {'class': 'cbi-title-field'}, [ logdata ]),
-            ]);
-        }
-        if (!logdata || !Array.isArray(logdata)) {
-            ui.addNotification(null, E('p', _('Unable to get log files') + ' : render()'));
-            return;
-        }
-        var h2 = E('div', {'class' : 'cbi-title-section'}, [
-            E('h2', {'class': 'cbi-title-field'}, [ ]),
-        ]);
+        this.log_names = logdata.map(log => log.filename).join('\n');
 
         var tabs = E('div', {}, E('div'));
 
@@ -200,15 +166,80 @@ return view.extend({
             tabs.firstElementChild.appendChild(tab);
         }
         ui.tabs.initTabGroup(tabs.firstElementChild.childNodes);
+        dom.content(this.logs, tabs);
+    },
+
+    render: function(logdata)
+    {
+        tools.execDefferedAction(this.svc_info);
+
+        let m, s, o;
+
+        m = new form.Map(tools.appName);
+
+        s = m.section(form.NamedSection, 'config');
+        s.anonymous = true;
+        s.addremove = false;
+
+        o = s.option(form.Flag, 'DAEMON_LOG_ENABLE', _('Enable'));
+        o.rmempty = false;
+        o.default = 0;
+
+        let current_size = uci.get(tools.appName, 'config', 'DAEMON_LOG_SIZE_MAX') || '0';
+        let has_valid_value = false;
+        let size_list = [ 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 7000 ];
+        if (current_size && current_size != '0') {
+            try {
+                current_size = parseInt(current_size, 10);
+                if (!isNaN(current_size) && current_size > 0) {
+                    has_valid_value = true;
+                    if (!size_list.includes(current_size)) {
+                        size_list.push(current_size);
+                        size_list.sort((a, b) => a - b);
+                    }
+                }
+            } catch(e) {
+                has_valid_value = false;
+            }
+        }
+        o = s.option(form.ListValue, 'DAEMON_LOG_SIZE_MAX', _('Maximum log size'));
+        o.rmempty = false;
+        if (!has_valid_value) {
+            o.value('', '');
+            o.default = '';
+        }
+        for (let idx = 0; idx < size_list.length; idx++) {
+            let fsize = size_list[idx];
+            o.value('' + fsize, fsize + ' KB');
+            if (has_valid_value && fsize === current_size) {
+                o.default = '' + fsize;
+            }
+        }
+        o.validate = function(section_id, value) {
+            if (!value || value === '') {
+                return _('Please select maximum log size');
+            }
+            return true;
+        };
+
+        this.logs = E('div');
+        this.renderLogs(Array.isArray(logdata) ? logdata : [ ]);
 
         this.POLL.mode = 1;
         this.POLL.init( this.pollLog.bind(this), 1000 );  // interval 1000 ms
         this.POLL.start();
 
-        return E('div', { }, [ h2, tabs ]);
+        return m.render().then(node => E('div', { }, [ node, this.logs ]));
     },
 
-    handleSaveApply: null,
-    handleSave: null,
-    handleReset: null
+    handleSaveApply: function(ev, mode)
+    {
+        return this.handleSave(ev).then(() => {
+            if (tools.checkUnsavedChanges()) {
+                ui.changes.apply(mode == '0');
+                /* the daemons pick up the log options only when they start */
+                tools.setDefferedAction('restart', this.svc_info);
+            }
+        });
+    },
 });

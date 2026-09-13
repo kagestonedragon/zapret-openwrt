@@ -45,7 +45,7 @@
 	},
 
 	"admin/services/zapret/dmnlog": {
-		"title": "Log Viewer",
+		"title": "Logs",
 		"order": 30,
 		"action": {
 			"type": "view",
