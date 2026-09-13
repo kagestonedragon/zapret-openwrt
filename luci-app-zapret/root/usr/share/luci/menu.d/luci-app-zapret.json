@@ -35,6 +35,15 @@
 		}
 	},
 
+	"admin/services/zapret/lists": {
+		"title": "Host lists",
+		"order": 25,
+		"action": {
+			"type": "view",
+			"path": "zapret/lists"
+		}
+	},
+
 	"admin/services/zapret/dmnlog": {
 		"title": "Log Viewer",
 		"order": 30,

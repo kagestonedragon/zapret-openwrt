@@ -21,6 +21,9 @@ fi
 	
 create_default_cfg "$opt_flags" "$opt_strat"
 
+# uci-config was recreated from scratch: drop the cron task of the removed user lists
+[ -x "$ZAPRET_BASE/update-lists.sh" ] && $ZAPRET_BASE/update-lists.sh -S >/dev/null 2>&1
+
 if [ "$cfg_run_on_boot" = "1" ]; then
 	uci set $ZAPRET_CFG_SEC.run_on_boot=1
 	uci commit

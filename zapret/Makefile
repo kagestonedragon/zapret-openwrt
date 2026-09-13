@@ -289,6 +289,8 @@ if [ -z "$${IPKG_INSTROOT}" ]; then
 	rm -f /etc/uci-defaults/zapret-uci-def-cfg.sh
 	# copy (sync) all params from uci-config to main config
 	/opt/zapret/sync_config.sh
+	# restore cron task for auto-updated host/IP lists
+	/opt/zapret/update-lists.sh -S >/dev/null 2>&1
 	# check main config
 	sh -n "$${ZAPRET_CONFIG}" 2>/dev/null || cp -f "$${ZAPRET_CONFIG_DEF}" "$${ZAPRET_CONFIG}"
 	sh -n "$${ZAPRET_CONFIG}" 2>/dev/null || exit 58
@@ -345,6 +347,9 @@ if [ -z "$${IPKG_INSTROOT}" ]; then
 	rm -f /etc/config/zapret-opkg*
 	rm -f /etc/config/zapret.opkg*
 	rm -f /etc/config/zapret.apk*
+	# remove cron task for auto-updated host/IP lists
+	[ -f /etc/crontabs/root ] && sed -i '/#zapret-lists/d' /etc/crontabs/root
+	/etc/init.d/cron restart 2>/dev/null
 	[ -f "/opt/zapret/config" ] && cp -f /opt/zapret/config "/opt/zapret/config.backup"
 	#rm -rf /opt/zapret
 	#echo "Directory /opt/zapret removed!"

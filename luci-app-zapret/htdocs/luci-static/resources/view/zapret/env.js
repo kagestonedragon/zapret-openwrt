@@ -36,6 +36,31 @@ return baseclass.extend({
     autoHostListFN    : '/opt/zapret/ipset/zapret-hosts-auto.txt',
     autoHostListDbgFN : '/opt/zapret/ipset/zapret-hosts-auto-debug.log',
 
+    ipsetDir          : '/opt/zapret/ipset',
+    updListsPath      : '/opt/zapret/update-lists.sh',
+    userListSecType   : 'userlist',
+    listCronParam     : 'LISTS_CRON',
+    listCronDefault   : '30 5 * * *',
+
+    /* ready-made sources for the "Add from repository" dialog */
+    listCatalog       : [
+        { id: 'fs-general',    type: 'hostlist', file: 'flowseal-general.txt',
+          name: 'Flowseal: general',
+          url : 'https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/lists/list-general.txt' },
+        { id: 'fs-google',     type: 'hostlist', file: 'flowseal-google.txt',
+          name: 'Flowseal: google/youtube',
+          url : 'https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/lists/list-google.txt' },
+        { id: 'fs-exclude',    type: 'hostlist', file: 'flowseal-exclude.txt',
+          name: 'Flowseal: excluded hosts',
+          url : 'https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/lists/list-exclude.txt' },
+        { id: 'fs-ipset',      type: 'ipset',    file: 'flowseal-ipset-all.txt',
+          name: 'Flowseal: ipset-all (~32k subnets)',
+          url : 'https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/.service/ipset-service.txt' },
+        { id: 'fs-ipset-excl', type: 'ipset',    file: 'flowseal-ipset-exclude.txt',
+          name: 'Flowseal: excluded subnets',
+          url : 'https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/lists/ipset-exclude.txt' },
+    ],
+
     load_env: function(ctx)
     {
         let env_proto = Object.getPrototypeOf(this);
