@@ -1,7 +1,6 @@
 'use strict';
 'require baseclass';
 'require fs';
-'require ui';
 'require uci';
 'require view.zapret.env as env_tools';
 
@@ -19,7 +18,7 @@
  *     --filter-udp=443
  *     ...
  *
- * The body may carry placeholders that the "extra settings" resolve at apply time.
+ * The body may carry placeholders that the filters of the tab resolve when it is saved.
  * They never reach NFQWS_OPT - what gets stored in uci is always fully rendered text,
  * because upstream zapret only expands <HOSTLIST> and <HOSTLIST_NOAUTO> itself and would
  * hand anything else to nfqws verbatim.
@@ -63,27 +62,20 @@ const FORBIDDEN_RE = /["`$&\\]/;
 // the only markers upstream zapret expands on its own
 const NATIVE_MARKERS = [ 'HOSTLIST', 'HOSTLIST_NOAUTO' ];
 
+// the ones a preset file may carry on top of them
+const TEMPLATE_MARKERS = [ 'GF_TCP', 'GF_UDP', 'FAKE_DISCORD', 'FAKE_GAME' ].concat(Object.keys(LIST_ROLES));
+
 return baseclass.extend({
     __init__: function() {
         env_tools.load_env(this);
     },
 
-    /* ------------------------------------------------------------------ uci option names */
-
-    /* the zapret2 flavour renames every nfqws option; presets are flavour agnostic */
-    optName: function(base) {
-        return (this.appName == 'zapret2') ? base.replace(/^NFQWS_/, 'NFQWS2_') : base;
-    },
-
-    getKnobs: function() {
-        let get = (k, dflt) => uci.get(this.appName, 'config', k) || dflt;
-        return {
-            preset:  get('NFQWS_PRESET', ''),
-            game:    get('GAME_FILTER', 'off'),
-            ipset:   get('IPSET_MODE', 'none'),
-            fakeDsc: get('FAKE_DISCORD_UDP', 'quic_initial_steamcommunity_com.bin'),
-            fakeGam: get('FAKE_GAME_UDP', 'quic_initial_4pda_to.bin'),
-        };
+    /* filter values of a config the Strategies tab has not saved yet, as def-cfg.sh sets them */
+    defaults: {
+        game:    'off',
+        ipset:   'none',
+        fakeDsc: 'quic_initial_steamcommunity_com.bin',
+        fakeGam: 'quic_initial_4pda_to.bin',
     },
 
     /* ------------------------------------------------------------------ preset files */
@@ -139,6 +131,19 @@ return baseclass.extend({
             parsed.path = item.path;
             return parsed;
         });
+    },
+
+    /* what the Strategies tab works with: { presets (read in), fakes, files (lists dir) } */
+    loadCatalog: function() {
+        return Promise.all([ this.listPresets(), this.listFakeFiles(), this.listListFiles() ])
+            .then(([ items, fakes, files ]) => {
+                return Promise.all(items.map(item => L.resolveDefault(this.readPreset(item), null)))
+                    .then(presets => ({
+                        presets: presets.filter(p => p != null),
+                        fakes: fakes,
+                        files: files,
+                    }));
+            });
     },
 
     parse: function(text) {
@@ -262,6 +267,7 @@ return baseclass.extend({
 
     /* ------------------------------------------------------------------ validation */
 
+    /* rendered text, as it goes into NFQWS_OPT */
     validateBody: function(text) {
         if (!text || !text.trim()) {
             return _('Strategy is empty');
@@ -274,10 +280,41 @@ return baseclass.extend({
         for (let i = 0; i < markers.length; i++) {
             let name = markers[i].slice(1, -1);
             if (NATIVE_MARKERS.indexOf(name) < 0) {
-                return _('Unresolved placeholder %h').format(markers[i]);
+                return _('Unresolved placeholder %s').format(markers[i]);
             }
         }
         return null;
+    },
+
+    /* the body of a preset file, which may still carry the placeholders */
+    validateTemplate: function(text) {
+        if (!text || !text.trim()) {
+            return _('Strategy is empty');
+        }
+        let bad = text.match(FORBIDDEN_RE);
+        if (bad) {
+            return _('Strategy cannot contain the character %s').format('"' + bad[0] + '"');
+        }
+        let markers = text.match(/<([A-Z_]+)>/g) || [ ];
+        for (let i = 0; i < markers.length; i++) {
+            let name = markers[i].slice(1, -1);
+            if (NATIVE_MARKERS.indexOf(name) < 0 && TEMPLATE_MARKERS.indexOf(name) < 0) {
+                return _('Unknown placeholder %s').format(markers[i]);
+            }
+        }
+        return null;
+    },
+
+    /* ports and port ranges, comma separated; empty is allowed */
+    validatePorts: function(text) {
+        if (!text) {
+            return null;
+        }
+        let ok = /^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(text) && text.split(',').every(part => {
+            let [ lo, hi ] = part.split('-').map(Number);
+            return lo >= 1 && lo <= 65535 && (hi == null || (hi >= lo && hi <= 65535));
+        });
+        return ok ? null : _('Ports must be a comma separated list of ports and ranges, for example %s').format('443,50000-50100');
     },
 
     validateName: function(name) {
@@ -290,19 +327,14 @@ return baseclass.extend({
         return null;
     },
 
-    /* presets using --dpi-desync-fooling=ts silently degrade without TCP timestamps */
-    needsTcpTimestamps: function(text) {
-        return /--dpi-desync-fooling=[a-z,]*\bts\b/.test(text || '');
-    },
-
     /* ------------------------------------------------------------------ host lists */
 
     /*
      * placeholder -> { name, file, path, added } for every list a preset can name.
      * The entry is found by the section name the Host lists catalog gives it, or by its
      * URL for a row added before catalog entries had fixed names. One that is not added
-     * still resolves to the catalog file name, so that the preview reads right;
-     * listProblems() is what keeps such a strategy from being applied.
+     * still resolves to the catalog file name; listProblems() is what keeps a strategy
+     * naming it from being saved.
      */
     resolveLists: function() {
         let out = { };
@@ -338,8 +370,7 @@ return baseclass.extend({
         for (let ph in lists) {
             known[lists[ph].path] = lists[ph];
         }
-        let title = path => known[path] ? '%h (%h)'.format(known[path].name, known[path].file)
-                                        : '%h'.format(path);
+        let title = path => known[path] ? '%s (%s)'.format(known[path].name, known[path].file) : path;
         let problems = [ ], seen = { };
         let report = (path, msg) => {
             if (!seen[path]) {
@@ -381,6 +412,61 @@ return baseclass.extend({
         return problems;
     },
 
+    /* ------------------------------------------------------------------ saving */
+
+    /*
+     * Stores the choices of the Strategies tab together with the strategy rendered from them,
+     * NFQWS_OPT and the port lists. It runs as the save callback of the tab, before uci.save,
+     * and stores nothing when the strategy would not work: the save stops with the reason and
+     * uci still holds what the tab was loaded with. Without a chosen preset, or when its file
+     * is gone, only the choices are stored.
+     *
+     * presets: as loadCatalog() returns them; knobs: { preset, game, ipset, fakeDsc, fakeGam }
+     */
+    stage: function(presets, knobs) {
+        let item = presets.filter(p => p.id == knobs.preset)[0];
+        if (!item) {
+            this.storeKnobs(knobs);
+            return Promise.resolve(false);
+        }
+        return this.listListFiles().then(files => {
+            let lists = this.resolveLists();
+            let opt = this.render(item.body, knobs, lists);
+            let problems = [ this.validateBody(opt) ].filter(err => err)
+                .concat(this.listProblems(opt, lists, files));
+            if (problems.length) {
+                throw new Error(_('Strategy "%s" cannot be applied:').format(item.meta.NAME || item.id)
+                                + '\n- ' + problems.join('\n- '));
+            }
+            let N = (this.appName == 'zapret2') ? 'NFQWS2' : 'NFQWS';
+            let ports = this.renderPorts(item.meta, knobs);
+            this.storeKnobs(knobs);
+            this.setIfChanged(N + '_OPT', '\n' + opt.trim() + '\n');
+            this.setIfChanged(N + '_PORTS_TCP', ports.tcp);
+            this.setIfChanged(N + '_PORTS_UDP', ports.udp);
+            return true;
+        });
+    },
+
+    storeKnobs: function(knobs) {
+        this.setIfChanged('NFQWS_PRESET', knobs.preset || null);
+        [ [ 'GAME_FILTER',      knobs.game ],
+          [ 'IPSET_MODE',       knobs.ipset ],
+          [ 'FAKE_DISCORD_UDP', knobs.fakeDsc ],
+          [ 'FAKE_GAME_UDP',    knobs.fakeGam ] ].forEach(([ opt, value ]) => {
+            if (value) {
+                this.setIfChanged(opt, value);
+            }
+        });
+    },
+
+    /* uci.set records a change even for the value already stored, and that would need applying */
+    setIfChanged: function(opt, value) {
+        if (uci.get(this.appName, 'config', opt) !== value) {
+            uci.set(this.appName, 'config', opt, value);
+        }
+    },
+
     /* ------------------------------------------------------------------ writing */
 
     writeFile: function(path, data) {
@@ -408,7 +494,8 @@ return baseclass.extend({
     },
 
     savePreset: function(name, meta, body) {
-        let err = this.validateName(name) || this.validateBody(body);
+        let err = this.validateName(name) || this.validateTemplate(body)
+               || this.validatePorts(meta.PORTS_TCP) || this.validatePorts(meta.PORTS_UDP);
         if (err) {
             return Promise.reject(new Error(err));
         }
@@ -416,353 +503,4 @@ return baseclass.extend({
         return this.writeFile(this.presetsUserDir + '/' + name + '.conf',
                               this.format(copy, body));
     },
-
-    /* ------------------------------------------------------------------ the dialog */
-
-    dialog: baseclass.extend({
-        __init__: function(opts = { }) {
-            Object.assign(this, {
-                ctx: null,        /* the presets module itself */
-                onApply: null,    /* callback({ opt, ports, knobs, id, name }) */
-            }, opts);
-            this.items = [ ];
-            this.fakes = [ ];
-            this.files = { };     /* lists dir: name -> size */
-            this.lists = { };     /* see resolveLists() */
-            this.cur = null;      /* { meta, body, id, user } */
-            this.template = '';   /* body as edited by the user, placeholders intact */
-            this.preview = true;
-        },
-
-        el: function(id) {
-            return document.getElementById(id);
-        },
-
-        knobs: function() {
-            return {
-                preset:  this.cur ? this.cur.id : '',
-                game:    this.el('zp_game').value,
-                ipset:   this.el('zp_ipset').value,
-                fakeDsc: this.el('zp_fdsc').value,
-                fakeGam: this.el('zp_fgam').value,
-            };
-        },
-
-        /* the editable template, picked up from the textarea when it is not in preview mode */
-        currentTemplate: function() {
-            if (!this.preview) {
-                this.template = this.el('zp_body').value;
-            }
-            return this.template;
-        },
-
-        load: function() {
-            let ctx = this.ctx;
-            let saved = ctx.getKnobs();
-            return Promise.all([ ctx.listPresets(), ctx.listFakeFiles(), ctx.listListFiles() ])
-                .then(([ items, fakes, files ]) => {
-                    this.items = items;
-                    this.fakes = fakes;
-                    this.files = files;
-                    this.lists = ctx.resolveLists();
-                    this.saved = saved;
-                    let want = items.filter(i => i.id == saved.preset);
-                    let pick = want.length ? want[0] : items[0];
-                    if (!pick) {
-                        return null;
-                    }
-                    return ctx.readPreset(pick).then(p => {
-                        this.cur = p;
-                        this.template = p.body;
-                        return p;
-                    });
-                });
-        },
-
-        refresh: function() {
-            let ctx = this.ctx;
-            let body = this.el('zp_body');
-            if (!this.cur) {
-                return;
-            }
-            let knobs = this.knobs();
-            let template = this.currentTemplate();
-            let rendered = ctx.render(template, knobs, this.lists);
-            if (this.preview) {
-                body.value = rendered;
-                body.readOnly = true;
-                body.classList.add('zp-readonly');
-            } else {
-                body.value = template;
-                body.readOnly = false;
-                body.classList.remove('zp-readonly');
-            }
-            let ports = ctx.renderPorts(this.cur.meta, knobs);
-            let notes = [ ];
-            notes.push('%s: <code>%s</code>'.format(_('TCP ports'), ports.tcp || '-'));
-            notes.push('%s: <code>%s</code>'.format(_('UDP ports'), ports.udp || '-'));
-            if (ctx.needsTcpTimestamps(template)) {
-                /* the fooling shifts the timestamp in the client's own packets, so it is the
-                   devices behind the router that have to send one, not the router */
-                notes.push('⚠ ' + _('This strategy uses --dpi-desync-fooling=ts, which only works for devices that send TCP timestamps. Windows does not by default: run %s there, as service.bat does.')
-                                    .format('<code>netsh interface tcp set global timestamps=enabled</code>'));
-            }
-            if (knobs.game != 'off') {
-                notes.push('⚠ ' + _('Game filter queues ports %s to nfqws - this is a heavy load for a router')
-                                    .format('<code>' + GAME_PORTS + '</code>'));
-            }
-            if (/--ipset=<IPSET>/.test(template)) {
-                if (knobs.ipset == 'none' && knobs.game != 'off') {
-                    notes.push('⚠ ' + _('IPSet filter "none": the sections filtered by ipset-all, the game ones too, match no address, the same as on Windows. Choose "loaded" to bypass the addresses of the list.'));
-                }
-                if (knobs.ipset == 'any') {
-                    notes.push('⚠ ' + _('IPSet filter "any": the sections filtered by ipset-all apply to every address, which breaks many sites. Do not leave it on for long.'));
-                }
-            }
-            let problems = ctx.listProblems(rendered, this.lists, this.files);
-            if (problems.length) {
-                notes.push('⛔ ' + _('Cannot be applied yet') + ':<br />&nbsp;&nbsp;• ' + problems.join('<br />&nbsp;&nbsp;• ')
-                    + '<br />' + _('Add the lists on the %s tab, press "Update all now" there and open this dialog again.')
-                                    .format('<a href="%s">%s</a>'.format(L.url('admin/services/zapret/lists'), _('Host lists'))));
-            }
-            this.el('zp_info').innerHTML = notes.join('<br />');
-            this.el('zp_del').disabled = !this.cur.user;
-        },
-
-        selectPreset: function(id) {
-            let ctx = this.ctx;
-            let want = this.items.filter(i => i.id == id);
-            if (!want.length) {
-                return Promise.resolve();
-            }
-            return ctx.readPreset(want[0]).then(p => {
-                this.cur = p;
-                this.template = p.body;
-                this.refresh();
-            }).catch(e => {
-                ui.addNotification(null, E('p', _('Unable to read the contents') + ': %s'.format(e.message)));
-            });
-        },
-
-        /* ---------------------------------------------------------- actions */
-
-        handleApply: function() {
-            let ctx = this.ctx;
-            if (!this.cur) {
-                return;
-            }
-            let knobs = this.knobs();
-            let rendered = ctx.render(this.currentTemplate(), knobs, this.lists);
-            let err = ctx.validateBody(rendered)
-                   || ctx.listProblems(rendered, this.lists, this.files).join('; ');
-            if (err) {
-                ui.addNotification(null, E('p', _('Unable to apply the preset') + ': ' + err));
-                return;
-            }
-            let ports = ctx.renderPorts(this.cur.meta, knobs);
-            if (typeof(this.onApply) === 'function') {
-                this.onApply({
-                    opt: rendered,
-                    ports: ports,
-                    knobs: knobs,
-                    id: this.cur.id,
-                    name: this.cur.meta.NAME || this.cur.id,
-                });
-            }
-            ui.hideModal();
-        },
-
-        handleSaveAs: function() {
-            let ctx = this.ctx;
-            if (!this.cur) {
-                return;
-            }
-            let name = (this.el('zp_name').value || '').trim();
-            let body = this.currentTemplate();
-            let meta = Object.assign({ }, this.cur.meta, { NAME: name });
-            return ctx.savePreset(name, meta, body).then(() => {
-                return ctx.listPresets();
-            }).then(items => {
-                this.items = items;
-                let sel = this.el('zp_pset');
-                sel.innerHTML = '';
-                this.fillPresetOptions(sel, name);
-                this.el('zp_name').value = '';
-                return this.selectPreset(name);
-            }).then(() => {
-                ui.addNotification(null, E('p', _('Preset "%s" saved.').format(name)), 'info');
-            }).catch(e => {
-                ui.addNotification(null, E('p', _('Unable to save the preset') + ': %s'.format(e.message)));
-            });
-        },
-
-        handleDelete: function() {
-            let ctx = this.ctx;
-            if (!this.cur || !this.cur.user) {
-                return;
-            }
-            let gone = this.cur.id;
-            if (!confirm(_('Delete preset "%s"?').format(gone))) {
-                return;
-            }
-            return ctx.removeFile(this.cur.path).then(() => {
-                return ctx.listPresets();
-            }).then(items => {
-                this.items = items;
-                let sel = this.el('zp_pset');
-                sel.innerHTML = '';
-                this.fillPresetOptions(sel, items.length ? items[0].id : null);
-                return items.length ? this.selectPreset(items[0].id) : null;
-            }).then(() => {
-                ui.addNotification(null, E('p', _('Preset "%s" deleted.').format(gone)), 'info');
-            }).catch(e => {
-                ui.addNotification(null, E('p', _('Unable to delete the preset') + ': %s'.format(e.message)));
-            });
-        },
-
-        /* ---------------------------------------------------------- rendering */
-
-        fillPresetOptions: function(sel, selected) {
-            let groups = [
-                { label: _('Bundled presets'), user: false },
-                { label: _('My presets'),      user: true  },
-            ];
-            for (let g = 0; g < groups.length; g++) {
-                let list = this.items.filter(i => i.user === groups[g].user);
-                if (!list.length) {
-                    continue;
-                }
-                let grp = E('optgroup', { 'label': groups[g].label });
-                for (let i = 0; i < list.length; i++) {
-                    let attr = { 'value': list[i].id };
-                    if (list[i].id === selected) {
-                        attr.selected = 'selected';
-                    }
-                    grp.appendChild(E('option', attr, [ list[i].id ]));
-                }
-                sel.appendChild(grp);
-            }
-        },
-
-        select: function(id, label, options, value) {
-            let sel = E('select', { 'id': id, 'class': 'cbi-input-select' });
-            for (let i = 0; i < options.length; i++) {
-                let attr = { 'value': options[i][0] };
-                if (options[i][0] === value) {
-                    attr.selected = 'selected';
-                }
-                sel.appendChild(E('option', attr, [ options[i][1] ]));
-            }
-            sel.addEventListener('change', () => this.refresh());
-            return E('div', { 'class': 'zp-knob' }, [ E('label', {}, label + ': '), sel ]);
-        },
-
-        render: function() {
-            let saved = this.saved;
-            let fakeOpts = this.fakes.map(n => [ n, n ]);
-            if (!fakeOpts.length) {
-                fakeOpts = [ [ saved.fakeDsc, saved.fakeDsc ] ];
-            }
-
-            let pset = E('select', { 'id': 'zp_pset', 'class': 'cbi-input-select' });
-            this.fillPresetOptions(pset, this.cur ? this.cur.id : null);
-            pset.addEventListener('change', ev => {
-                this.template = '';
-                this.selectPreset(ev.target.value);
-            });
-
-            let prev = E('input', { 'type': 'checkbox', 'id': 'zp_prev', 'checked': 'checked' });
-            prev.addEventListener('change', ev => {
-                /* edit -> preview: capture the edits before the rendered text overwrites them.
-                   preview -> edit: the textarea holds rendered text, so keep the stored template. */
-                if (ev.target.checked) {
-                    this.template = this.el('zp_body').value;
-                }
-                this.preview = ev.target.checked;
-                this.refresh();
-            });
-
-            let body = E('textarea', {
-                'id': 'zp_body',
-                'class': 'cbi-input-textarea',
-                'style': 'width:100% !important',
-                'rows': 20,
-                'wrap': 'off',
-                'spellcheck': 'false',
-            });
-
-            let del_btn = E('button', {
-                'id': 'zp_del',
-                'class': 'btn cbi-button-remove',
-                'click': ui.createHandlerFn(this, this.handleDelete),
-            }, _('Delete'));
-
-            ui.showModal(_('Strategy presets'), [
-                E('div', { 'class': 'cbi-section' }, [
-                    E('div', { 'class': 'zp-row' }, [
-                        E('label', {}, _('Preset') + ': '), pset, ' ',
-                        E('label', {}, [ prev, ' ', _('show with substitutions applied') ]),
-                    ]),
-                    E('p', {}, body),
-                    E('div', { 'class': 'cbi-section-descr' },
-                        _('Uncheck the box above to edit the template. Placeholders &lt;GF_TCP&gt;, &lt;GF_UDP&gt;, &lt;IPSET&gt;, &lt;FAKE_DISCORD&gt;, &lt;FAKE_GAME&gt; are replaced by the settings below, &lt;LIST_GENERAL&gt;, &lt;LIST_GOOGLE&gt;, &lt;LIST_EXCLUDE&gt;, &lt;IPSET_EXCLUDE&gt; by the files of those lists on the Host lists tab; &lt;HOSTLIST&gt; is expanded by zapret itself.')),
-                    E('hr'),
-                    this.select('zp_game', _('Game filter'), [
-                        [ 'off', _('disabled') ],
-                        [ 'all', _('TCP and UDP') ],
-                        [ 'tcp', _('TCP only') ],
-                        [ 'udp', _('UDP only') ],
-                    ], saved.game),
-                    this.select('zp_ipset', _('IPSet filter'), [
-                        [ 'none',   'none' ],
-                        [ 'any',    'any' ],
-                        [ 'loaded', 'loaded (' + this.lists.IPSET.file + ')' ],
-                    ], saved.ipset),
-                    this.select('zp_fdsc', _('Discord/STUN UDP fake'), fakeOpts, saved.fakeDsc),
-                    this.select('zp_fgam', _('Game UDP fake'), fakeOpts, saved.fakeGam),
-                    E('div', { 'id': 'zp_info', 'class': 'cbi-section-descr' }),
-                ]),
-                E('div', { 'style': 'display:flex; justify-content:space-between; align-items:center; gap:8px;' }, [
-                    E('div', {}, [
-                        E('input', {
-                            'id': 'zp_name',
-                            'type': 'text',
-                            'class': 'cbi-input-text',
-                            'placeholder': _('new preset name'),
-                            'style': 'width:180px',
-                        }), ' ',
-                        E('button', {
-                            'class': 'btn cbi-button-action',
-                            'click': ui.createHandlerFn(this, this.handleSaveAs),
-                        }, _('Save as')), ' ',
-                        del_btn,
-                    ]),
-                    E('div', {}, [
-                        E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Dismiss')), ' ',
-                        E('button', {
-                            'class': 'btn cbi-button-positive important',
-                            'click': ui.createHandlerFn(this, this.handleApply),
-                        }, _('Apply preset')),
-                    ]),
-                ]),
-            ]);
-            this.refresh();
-        },
-
-        show: function() {
-            ui.showModal(null, E('p', { 'class': 'spinning' }, _('Loading')));
-            return this.load().then(p => {
-                ui.hideModal();
-                if (!p) {
-                    ui.addNotification(null, E('p', _('No presets found in %s').format(this.ctx.presetsDir)));
-                    return;
-                }
-                return this.render();
-            }).catch(e => {
-                ui.hideModal();
-                ui.addNotification(null, E('p', _('Unable to read the contents') + ': %s'.format(e.message)));
-            });
-        },
-    }),
 });
-

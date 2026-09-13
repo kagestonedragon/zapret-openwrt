@@ -13,27 +13,43 @@ String.prototype.format = function() {
 };
 var _ = function(s) { return s; };
 var baseclass = { extend: function(o) { return o; } };
-var fs = {}, ui = {};
+var L = { resolveDefault: function(p, dflt) { return Promise.resolve(p).catch(function() { return dflt; }); } };
 
 // the real catalog, so that the section names and files the presets rely on are the shipped ones
 var ENV = new Function('baseclass', readFile(VIEW + 'env.js'))(baseclass);
 
-// uci only has to answer for the Host lists rows
-var rows = [];
+// uci: the Host lists rows, and the options of the config section that stage() reads and writes
+var rows = [], store = {};
 var uci = {
-    get: function() { return null; },
+    get: function(conf, sid, opt) {
+        return (sid == 'config' && store[opt] !== undefined) ? store[opt] : null;
+    },
+    set: function(conf, sid, opt, val) {
+        if (sid == 'config') store[opt] = val;
+    },
     sections: function(conf, type, cb) {
         rows.filter(function(r) { return r['.type'] == type; }).forEach(cb);
     },
 };
+
+// fs.list answers with dirFiles (name -> size), the lists dir as stage() sees it
+var dirFiles = {};
+var fs = {
+    list: function(dir) {
+        return Promise.resolve(Object.keys(dirFiles).map(function(n) {
+            return { name: n, type: 'file', size: dirFiles[n] };
+        }));
+    },
+};
+
 var env_tools = { load_env: function(ctx) {
     [ 'appName', 'presetsDir', 'presetsUserDir', 'fakeNsDir', 'ipsetDir', 'userListSecType', 'listCatalog' ]
         .forEach(function(k) { ctx[k] = ENV[k]; });
 } };
 
 // Load presets.js the way LuCI does: as a function body with the 'require' names as params.
-var P = new Function('baseclass','fs','ui','uci','env_tools','_', readFile(VIEW + 'presets.js'))
-            (baseclass, fs, ui, uci, env_tools, _);
+var P = new Function('baseclass','fs','uci','env_tools','_', readFile(VIEW + 'presets.js'))
+            (baseclass, fs, uci, env_tools, _);
 env_tools.load_env(P);
 
 var fails = 0;
@@ -193,19 +209,20 @@ check('reject dollar',   P.validateBody('--a=$(id)') !== null);
 check('reject backtick', P.validateBody('--a=`id`') !== null);
 check('reject stray ph', P.validateBody('--a=<IPSET>') !== null);
 check('allow HOSTLIST',  P.validateBody('--filter-tcp=443 <HOSTLIST>') === null);
+check('template: placeholders allowed',    P.validateTemplate(p.body) === null, P.validateTemplate(p.body));
+check('template: unknown placeholder',     P.validateTemplate('--a=<FOO>') !== null);
+check('template: forbidden character',     P.validateTemplate('--a=$x') !== null);
+check('ports: lists and ranges',           P.validatePorts('80,443,50000-50100') === null && P.validatePorts('') === null);
+check('ports: refused',                    P.validatePorts('80;443') !== null && P.validatePorts('70000') !== null && P.validatePorts('500-100') !== null);
 check('name ok',         P.validateName('my_preset-1.v2') === null);
 check('name rejects /',  P.validateName('../../etc/passwd') !== null);
 check('name rejects sp', P.validateName('my preset') !== null);
 check('name rejects ""', P.validateName('') !== null);
-check('ts detect on',    P.needsTcpTimestamps('--dpi-desync-fooling=ts') === true);
-check('ts detect off',   P.needsTcpTimestamps('--dpi-desync-fooling=badseq') === false);
 
 // --- round trip through format/parse
 var round = P.parse(P.format(p.meta, p.body));
 check('round-trip body',  round.body === p.body.trim());
 check('round-trip ports', round.meta.PORTS_TCP === p.meta.PORTS_TCP);
-
-print(fails ? ('\n' + fails + ' FAILURE(S)') : '\nall checks passed');
 
 // ---- sweep every shipped preset through every knob combination
 var ids = ['general','general_ALT','general_ALT2','general_ALT3','general_ALT4','general_ALT5',
@@ -236,4 +253,48 @@ for (var i = 0; i < ids.length; i++) {
         if ((ipsets[s2] == 'none') != (out.indexOf('--ipset-ip=') >= 0)) sweepFail('ipset-ip ' + tag);
     }
 }
-print('\nsweep: ' + ids.length + ' presets x ' + (games.length*ipsets.length) + ' combos = ' + combos + ' renders, ' + sweep_fail + ' failures');
+
+// ---- saving: what the Strategies tab stores once its form is parsed
+function stageWith(values, files, choices) {
+    store = values;
+    dirFiles = files;
+    return P.stage([ { id: 'general', user: false, meta: p.meta, body: p.body } ], choices);
+}
+function tab(preset, game, ipset) {
+    return { preset: preset, game: game, ipset: ipset, fakeDsc: P.defaults.fakeDsc, fakeGam: P.defaults.fakeGam };
+}
+
+stageWith({ IPSET_MODE: 'none' }, allFiles(), tab('general', 'all', 'loaded')).then(function(done) {
+    var opt = store.NFQWS_OPT || '';
+    check('stage: applied', done === true);
+    check('stage: choices stored with it', store.NFQWS_PRESET === 'general' && store.GAME_FILTER === 'all'
+          && store.IPSET_MODE === 'loaded' && store.FAKE_GAME_UDP === P.defaults.fakeGam, JSON.stringify(store).slice(0, 200));
+    check('stage: game ranges in the strategy', opt.indexOf('--filter-tcp=1024-65535') >= 0 && opt.indexOf('--filter-udp=1024-65535') >= 0);
+    check('stage: ipset-all from Host lists', opt.indexOf('--ipset=/opt/zapret/ipset/flowseal-ipset-all.txt') >= 0);
+    check('stage: default game fake', opt.indexOf('/flowseal/quic_initial_4pda_to.bin') >= 0);
+    check('stage: stored as the NFQWS_OPT editor stores it', /^\n--comment=preset_general\n[\s\S]*[^\n]\n$/.test(opt));
+    check('stage: tcp ports', store.NFQWS_PORTS_TCP === '80,443,2053,2083,2087,2096,8443,1024-65535', store.NFQWS_PORTS_TCP);
+    check('stage: udp ports', store.NFQWS_PORTS_UDP === '443,19294-19344,50000-50100,1024-65535', store.NFQWS_PORTS_UDP);
+    var missing = allFiles(); delete missing['flowseal-general.txt'];
+    return stageWith({ IPSET_MODE: 'none' }, missing, tab('general', 'all', 'loaded')).then(function() {
+        check('stage: refuses a list that is not downloaded', false, 'resolved');
+    }, function(e) {
+        check('stage: refuses a list that is not downloaded', /cannot be applied[\s\S]*flowseal-general\.txt/.test(e.message), e.message);
+        check('stage: nothing stored when refused', store.NFQWS_OPT === undefined && store.NFQWS_PRESET === undefined
+              && store.IPSET_MODE === 'none');
+    });
+}).then(function() {
+    return stageWith({ }, allFiles(), tab(null, 'udp', 'any')).then(function(done) {
+        check('stage: without a preset only the choices', done === false && store.NFQWS_OPT === undefined
+              && store.GAME_FILTER === 'udp' && store.NFQWS_PRESET === undefined);
+    });
+}).then(function() {
+    return stageWith({ NFQWS_OPT: 'x' }, allFiles(), tab('gone', 'off', 'none')).then(function(done) {
+        check('stage: a preset whose file is gone leaves the strategy', done === false && store.NFQWS_OPT === 'x');
+    });
+}).then(null, function(e) {
+    check('stage: no unexpected error', false, e && e.message);
+}).then(function() {
+    print(fails ? ('\n' + fails + ' FAILURE(S)') : '\nall checks passed');
+    print('\nsweep: ' + ids.length + ' presets x ' + (games.length*ipsets.length) + ' combos = ' + combos + ' renders, ' + sweep_fail + ' failures');
+});
