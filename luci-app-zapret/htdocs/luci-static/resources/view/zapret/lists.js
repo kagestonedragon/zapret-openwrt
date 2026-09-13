@@ -95,6 +95,8 @@ return view.extend({
 
             let box = E('input', { 'type': 'checkbox' });
             if (done) {
+                /* already present: shown ticked and locked, there is nothing left to add */
+                box.checked = true;
                 box.disabled = true;
             } else if (dupes.length) {
                 box.checked = true;
@@ -106,8 +108,6 @@ return view.extend({
             let note;
             if (dupes.length) {
                 note = _('%d duplicate row(s) will be replaced by one').format(dupes.length);
-            } else if (done) {
-                note = _('Already added');
             } else {
                 note = item.file + ' \u2190 ' + item.url;
             }
