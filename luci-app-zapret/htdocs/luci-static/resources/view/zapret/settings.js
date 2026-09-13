@@ -35,7 +35,7 @@ return view.extend({
 
         let m, s, o, tabname;
 
-        m = new form.Map(tools.appName, tools.AppName + ' - ' + _('Settings'));
+        m = new form.Map(tools.appName);
 
         s = m.section(form.NamedSection, 'config');
         s.anonymous = true;

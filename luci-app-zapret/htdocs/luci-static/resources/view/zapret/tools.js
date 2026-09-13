@@ -189,8 +189,25 @@ return baseclass.extend({
             });
     },    
     
+    /* the menu entries are separate pages whose tab bar the theme draws outside the view,
+       so the shared heading goes above that bar, where a tabbed form.Map has its title */
+    addPageHeader: function()
+    {
+        let view = document.getElementById('view');
+        if (!view || document.getElementById('zapret-page-header')) {
+            return;
+        }
+        let tabmenu = document.getElementById('tabmenu');
+        let anchor = (tabmenu && tabmenu.parentNode === view.parentNode) ? tabmenu : view;
+        anchor.parentNode.insertBefore(E('div', { 'id': 'zapret-page-header' }, [
+            E('h2', { }, _('%s Settings').format(this.AppName)),
+            E('div', { 'class': 'cbi-map-descr' }, _('Configuration for %s service').format(this.AppName)),
+        ]), anchor);
+    },
+
     baseLoad: function(ctx, callback)
     {
+        this.addPageHeader();
         return Promise.all([
             L.probeSystemFeatures(),
             this.getSvcInfo(),           // svc_info
