@@ -9,44 +9,32 @@
 
 document.head.appendChild(E('link', {
     rel: 'stylesheet',
-    href: L.resource('view/zapret/styles.css')
+    /* versioned like the views themselves, or the browser keeps the stylesheet of an older package */
+    href: L.resource('view/zapret/styles.css') + (L.env.resource_version ? '?v=' + L.env.resource_version : '')
 }));
 
 /*
  * A set of buttons with one of them pressed; the value is the key of the pressed one.
- * groups: [ { title, choices: [ { key, label, hint } ] } ]
+ * choices: [ { key, label, hint } ]
  */
 const UIChips = ui.AbstractElement.extend({
-    __init__: function(value, groups, options) {
+    __init__: function(value, choices, options) {
         this.value = value;
-        this.groups = groups;
+        this.choices = choices;
         this.options = Object.assign({ }, options);
     },
 
     render: function() {
-        let frame = E('div', {
-            'id': this.options.id,
-            'class': 'zp-chips' + (this.options.card ? ' zp-card' : ''),
-        });
-        this.groups.forEach(group => {
-            if (!group.choices.length) {
-                return;
-            }
-            if (group.title) {
-                frame.appendChild(E('div', { 'class': 'zp-chip-title' }, [ group.title ]));
-            }
-            frame.appendChild(E('div', { 'class': 'zp-chip-group' }, group.choices.map(choice =>
-                E('button', {
-                    'type': 'button',
-                    'class': 'zp-chip',
-                    'title': choice.hint || null,
-                    'data-value': choice.key,
-                    'aria-pressed': (choice.key === this.value) ? 'true' : 'false',
-                    'click': () => this.setValue(choice.key),
-                }, [ choice.label ])
-            )));
-        });
-        return this.bind(frame);
+        return this.bind(E('div', { 'id': this.options.id, 'class': 'zp-chips' }, this.choices.map(choice =>
+            E('button', {
+                'type': 'button',
+                'class': 'zp-chip',
+                'title': choice.hint || null,
+                'data-value': choice.key,
+                'aria-pressed': (choice.key === this.value) ? 'true' : 'false',
+                'click': () => this.setValue(choice.key),
+            }, [ choice.label ])
+        )));
     },
 
     bind: function(frame) {
@@ -115,9 +103,68 @@ const UIGameFilter = ui.AbstractElement.extend({
 });
 
 /*
- * Form options over the widgets above; groups() is called on every render. The parse of the
- * form leaves them out of uci: the save callback stores them together with the strategy they
- * render (presets.stage), so a refused save leaves nothing half written behind.
+ * The strategy drop-down: the built-in strategies, then the own ones in a group of their own.
+ * groups: [ { title, choices: [ { key, label } ] } ]
+ */
+const UIStrategySelect = ui.AbstractElement.extend({
+    __init__: function(value, groups, options) {
+        this.value = value;
+        this.groups = groups;
+        this.options = Object.assign({ }, options);
+    },
+
+    render: function() {
+        let select = E('select', { 'id': this.options.id, 'class': 'cbi-input-select' });
+        let known = false;
+        let option = (choice) => {
+            known = known || (choice.key === this.value);
+            return E('option', {
+                'value': choice.key,
+                'selected': (choice.key === this.value) ? 'selected' : null,
+            }, [ choice.label ]);
+        };
+        this.groups.forEach(group => {
+            if (!group.choices.length) {
+                return;
+            }
+            if (group.title) {
+                select.appendChild(E('optgroup', { 'label': group.title }, group.choices.map(option)));
+            } else {
+                group.choices.map(option).forEach(node => select.appendChild(node));
+            }
+        });
+        if (!this.value) {
+            select.insertBefore(E('option', { 'value': '', 'selected': 'selected', 'disabled': 'disabled' },
+                                  [ _('-- Please choose --') ]), select.firstChild);
+        } else if (!known) {
+            /* a strategy whose file is gone stays picked rather than turning into another one */
+            select.appendChild(E('option', { 'value': this.value, 'selected': 'selected' }, [ this.value ]));
+        }
+        return this.bind(select);
+    },
+
+    bind: function(select) {
+        this.node = select;
+        this.setUpdateEvents(select, 'change');
+        this.setChangeEvents(select, 'change');
+        dom.bindClassInstance(select, this);
+        return select;
+    },
+
+    getValue: function() {
+        return this.node.value || null;
+    },
+
+    setValue: function(value) {
+        this.value = value;
+        this.node.value = value || '';
+    },
+});
+
+/*
+ * Form options over the widgets above; choices() and groups() are called on every render. The
+ * parse of the form leaves them out of uci: the save callback stores them together with the
+ * strategy they render (presets.stage), so a refused save leaves nothing half written behind.
  */
 const CBIChips = form.Value.extend({
     __name__: 'CBI.ZapretChips',
@@ -126,9 +173,21 @@ const CBIChips = form.Value.extend({
     remove: function() { },
 
     renderWidget: function(section_id, option_index, cfgvalue) {
-        return new UIChips((cfgvalue != null) ? cfgvalue : this.default, this.groups(section_id), {
+        return new UIChips((cfgvalue != null) ? cfgvalue : this.default, this.choices(section_id), {
             id: this.cbid(section_id),
-            card: this.card,
+        }).render();
+    },
+});
+
+const CBIStrategy = form.Value.extend({
+    __name__: 'CBI.ZapretStrategy',
+
+    write: function() { },
+    remove: function() { },
+
+    renderWidget: function(section_id, option_index, cfgvalue) {
+        return new UIStrategySelect(cfgvalue, this.groups(section_id), {
+            id: this.cbid(section_id),
         }).render();
     },
 });
@@ -515,23 +574,22 @@ return view.extend({
 
         m = this.map = new form.Map(tools.appName);
 
-        s = m.section(form.NamedSection, 'config', 'main', _('Strategy'));
+        s = m.section(form.NamedSection, 'config');
         s.anonymous = true;
         s.addremove = false;
 
-        o = s.option(CBIChips, 'NFQWS_PRESET', _('Strategy'));
-        o.card = true;
+        o = s.option(CBIStrategy, 'NFQWS_PRESET', _('Strategy'));
         o.groups = () => {
-            let chip = (p) => ({ key: p.id, label: p.meta.NAME || p.id });
+            let choice = (p) => ({ key: p.id, label: p.meta.NAME || p.id });
             return [
-                { choices: this.catalog.presets.filter(p => !p.user).map(chip) },
-                { title: _('My strategies'), choices: this.catalog.presets.filter(p => p.user).map(chip) },
+                { choices: this.catalog.presets.filter(p => !p.user).map(choice) },
+                { title: _('My strategies'), choices: this.catalog.presets.filter(p => p.user).map(choice) },
             ];
         };
         o.renderWidget = function(section_id, option_index, cfgvalue) {
             return E('div', { }, [
-                CBIChips.prototype.renderWidget.call(this, section_id, option_index, cfgvalue),
-                E('div', { 'class': 'zp-toolbar' }, [
+                E('div', { 'class': 'zp-strategy' }, [
+                    CBIStrategy.prototype.renderWidget.call(this, section_id, option_index, cfgvalue),
                     E('button', {
                         'type': 'button',
                         'class': 'btn cbi-button-add',
@@ -549,20 +607,16 @@ return view.extend({
             ]);
         };
 
-        s = m.section(form.NamedSection, 'config');
-        s.anonymous = true;
-        s.addremove = false;
-
         o = s.option(CBIGameFilter, 'GAME_FILTER', _('Game Filter'));
         o.default = presets.defaults.game;
 
         o = s.option(CBIChips, 'IPSET_MODE', _('IPSet Filter'));
         o.default = presets.defaults.ipset;
-        o.groups = () => [ { choices: [
+        o.choices = () => [
             { key: 'none',   label: 'none',   hint: _('The sections filtered by ipset-all match no address') },
             { key: 'any',    label: 'any',    hint: _('The sections filtered by ipset-all apply to every address') },
             { key: 'loaded', label: 'loaded', hint: _('The addresses from %s').format(presets.resolveLists().IPSET.file) },
-        ] } ];
+        ];
 
         [ [ 'FAKE_DISCORD_UDP', _('Discord/STUN UDP fake'), presets.defaults.fakeDsc ],
           [ 'FAKE_GAME_UDP',    _('Game UDP fake'),         presets.defaults.fakeGam ] ].forEach(([ name, title, dflt ]) => {

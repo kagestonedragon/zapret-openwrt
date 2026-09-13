@@ -8,7 +8,8 @@
 
 document.head.appendChild(E('link', {
     rel: 'stylesheet',
-    href: L.resource('view/zapret/styles.css')
+    /* versioned like the views themselves, or the browser keeps the stylesheet of an older package */
+    href: L.resource('view/zapret/styles.css') + (L.env.resource_version ? '?v=' + L.env.resource_version : '')
 }));
 
 const btn_style_action  = 'btn cbi-button-action';
