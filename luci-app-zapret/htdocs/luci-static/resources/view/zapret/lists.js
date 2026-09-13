@@ -153,14 +153,14 @@ return view.extend({
 
         let m, s, o;
 
-        m = new form.Map(tools.appName, tools.AppName + ' - ' + _('Host lists'));
+        m = new form.Map(tools.appName, tools.AppName + ' - ' + _('Remote lists'));
 
         /* ----------------------- lists toolbar --------------------------- */
 
         s = m.section(form.NamedSection, 'config');
         s.anonymous = true;
         s.addremove = false;
-        s.title = _('Host lists');
+        s.title = _('Remote lists');
 
         o = s.option(form.Value, tools.listCronParam, _('Auto-update schedule'));
         o.placeholder = tools.listCronDefault;
@@ -200,7 +200,7 @@ return view.extend({
 
         /* -------------------------- user lists --------------------------- */
 
-        s = m.section(form.GridSection, tools.userListSecType, _('User lists'),
+        s = m.section(form.GridSection, tools.userListSecType, _('Lists'),
             _('Files are stored in %s.').format(tools.ipsetDir));
         s.anonymous = true;
         s.addremove = true;

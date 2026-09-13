@@ -78,5 +78,5 @@ REMOTE
 
 echo
 echo "done. open LuCI -> Services -> Zapret -> Settings -> NFQWS options"
-echo "                        and Services -> Zapret -> Host lists"
+echo "                        and Services -> Zapret -> Remote lists"
 echo "and HARD-refresh the browser (Ctrl+Shift+R) - LuCI caches the JS."
