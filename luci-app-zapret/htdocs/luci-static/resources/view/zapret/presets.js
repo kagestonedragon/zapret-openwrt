@@ -502,8 +502,10 @@ return baseclass.extend({
             notes.push('%s: <code>%s</code>'.format(_('TCP ports'), ports.tcp || '-'));
             notes.push('%s: <code>%s</code>'.format(_('UDP ports'), ports.udp || '-'));
             if (ctx.needsTcpTimestamps(template)) {
-                notes.push('⚠ ' + _('This strategy uses --dpi-desync-fooling=ts and needs %s')
-                                    .format('<code>net.ipv4.tcp_timestamps=1</code>'));
+                /* the fooling shifts the timestamp in the client's own packets, so it is the
+                   devices behind the router that have to send one, not the router */
+                notes.push('⚠ ' + _('This strategy uses --dpi-desync-fooling=ts, which only works for devices that send TCP timestamps. Windows does not by default: run %s there, as service.bat does.')
+                                    .format('<code>netsh interface tcp set global timestamps=enabled</code>'));
             }
             if (knobs.game != 'off') {
                 notes.push('⚠ ' + _('Game filter queues ports %s to nfqws - this is a heavy load for a router')

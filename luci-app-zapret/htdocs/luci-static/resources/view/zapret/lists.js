@@ -358,7 +358,9 @@ return view.extend({
             return this.openUpdateDialog([ '-a' ], _('Update all lists'));
         }, this);
 
-        o = s.option(form.Value, tools.listCronParam, _('Auto-update schedule'));
+        o = s.option(form.Value, tools.listCronParam, _('Auto-update schedule'),
+                     _('Cron schedule for the lists with Auto-update on; empty means %s.')
+                        .format('<code>' + tools.listCronDefault + '</code>'));
         o.placeholder = tools.listCronDefault;
         o.value('30 5 * * *',   _('Every day at 05:30'));
         o.value('30 5 * * 1',   _('Every Monday at 05:30'));

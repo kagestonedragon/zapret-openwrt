@@ -12,6 +12,8 @@ TMP_DIR="$ZAPRET_BASE/ipset/.tmp"
 LIST_SEC_TYPE="userlist"
 CRON_TAG="#$ZAPRET_CFG_NAME-lists"
 CRON_PARAM="LISTS_CRON"
+# used while LISTS_CRON is empty; the LuCI page shows it as the placeholder
+CRON_DEFAULT="30 5 * * *"
 CURL_TIMEOUT=90
 CURL_HEADER1="Cache-Control: no-cache, no-store, must-revalidate"
 MAX_LIST_SIZE=33554432
@@ -214,6 +216,8 @@ function cron_sync
 {
 	local sched="$( uci -q get $ZAPRET_CFG_SEC.$CRON_PARAM )"
 	local cur new_task=""
+
+	[ -z "$sched" ] && sched="$CRON_DEFAULT"
 
 	ZAP_AUTO_CNT=0
 	config_foreach count_autoupdate $LIST_SEC_TYPE
