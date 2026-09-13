@@ -35,7 +35,6 @@ mkdir -p "$STAGE/usr/share/rpcd/acl.d"
 mkdir -p "$STAGE/usr/share/luci/menu.d"
 mkdir -p "$STAGE/opt/zapret/presets/user"
 mkdir -p "$STAGE/opt/zapret/files/fake/flowseal"
-mkdir -p "$STAGE/opt/zapret/ipset"
 
 cp luci-app-zapret/htdocs/luci-static/resources/view/zapret/*.js  "$STAGE/www/luci-static/resources/view/zapret/"
 cp luci-app-zapret/htdocs/luci-static/resources/view/zapret/*.css "$STAGE/www/luci-static/resources/view/zapret/"
@@ -46,10 +45,8 @@ cp zapret/comfunc.sh zapret/def-cfg.sh zapret/uci-def-cfg.sh      "$STAGE/opt/za
 cp zapret/update-lists.sh zapret/restore-def-cfg.sh               "$STAGE/opt/zapret/"
 cp zapret/presets/*.conf                                          "$STAGE/opt/zapret/presets/"
 cp zapret/files/fake/flowseal/*.bin                               "$STAGE/opt/zapret/files/fake/flowseal/"
-cp zapret/ipset/zapret-hosts-flowseal.txt                         "$STAGE/opt/zapret/ipset/"
-cp zapret/ipset/zapret-hosts-flowseal-exclude.txt                 "$STAGE/opt/zapret/ipset/"
 
-find "$STAGE/opt/zapret/presets" "$STAGE/opt/zapret/files" "$STAGE/opt/zapret/ipset" -type f -exec chmod 644 {} +
+find "$STAGE/opt/zapret/presets" "$STAGE/opt/zapret/files" -type f -exec chmod 644 {} +
 chmod 755 "$STAGE/opt/zapret/"*.sh
 chmod 644 "$STAGE/www/luci-static/resources/view/zapret/"* "$STAGE/usr/share/rpcd/acl.d/"* "$STAGE/usr/share/luci/menu.d/"*
 

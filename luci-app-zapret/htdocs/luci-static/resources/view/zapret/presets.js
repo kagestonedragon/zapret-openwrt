@@ -25,12 +25,35 @@
  * hand anything else to nfqws verbatim.
  *
  *     <GF_TCP> / <GF_UDP>   game filter port range
- *     <IPSET>               "bypass by IP" list
+ *     <IPSET>               ipset-all, switched by the IPSet filter: none / any / loaded
+ *     <LIST_GENERAL>        list-general.txt  \
+ *     <LIST_GOOGLE>         list-google.txt    |  files of the matching lists
+ *     <LIST_EXCLUDE>        list-exclude.txt   |  on the Host lists tab
+ *     <IPSET_EXCLUDE>       ipset-exclude.txt /
  *     <FAKE_DISCORD>        Discord/STUN UDP fake payload
  *     <FAKE_GAME>           unknown-UDP (game traffic) fake payload
  */
 
 const GAME_PORTS = '1024-65535';
+
+/* what service.bat writes into ipset-all.txt for "none": an address nothing is sent to */
+const NO_MATCH_IP = '203.0.113.113/32';
+
+/* list placeholder -> section of the Host lists entry it is taken from (env.listCatalog) */
+const LIST_ROLES = {
+    LIST_GENERAL:  'fs_general',
+    LIST_GOOGLE:   'fs_google',
+    LIST_EXCLUDE:  'fs_exclude',
+    IPSET_EXCLUDE: 'fs_ipset_exclude',
+    IPSET:         'fs_ipset_all',
+};
+
+/* files the package shipped before the Flowseal lists moved to Host lists; presets saved
+   by the user back then still name them */
+const LEGACY_PATHS = {
+    '/opt/zapret/ipset/zapret-hosts-flowseal.txt':         '<LIST_GENERAL>',
+    '/opt/zapret/ipset/zapret-hosts-flowseal-exclude.txt': '<LIST_EXCLUDE>',
+};
 
 // /opt/zapret/config is sourced as root and rewritten with sed. A quote splits the shell
 // string, '&' expands to the whole match in the sed replacement, '$' and '`' execute.
@@ -94,9 +117,23 @@ return baseclass.extend({
         });
     },
 
+    /* name -> size of the files in the lists dir */
+    listListFiles: function() {
+        return L.resolveDefault(fs.list(this.ipsetDir), []).then(entries => {
+            let out = { };
+            (entries || []).forEach(e => {
+                if (e.type == 'file') {
+                    out[e.name] = e.size;
+                }
+            });
+            return out;
+        });
+    },
+
     readPreset: function(item) {
         return fs.read(item.path).then(text => {
             let parsed = this.parse(text || '');
+            parsed.body = this.upgradeBody(parsed.body);
             parsed.id = item.id;
             parsed.user = item.user;
             parsed.path = item.path;
@@ -126,6 +163,13 @@ return baseclass.extend({
             }
         }
         return { meta: meta, body: body.join('\n').trim() };
+    },
+
+    upgradeBody: function(body) {
+        for (let path in LEGACY_PATHS) {
+            body = body.split(path).join(LEGACY_PATHS[path]);
+        }
+        return body;
     },
 
     format: function(meta, body) {
@@ -158,28 +202,47 @@ return baseclass.extend({
     },
 
     /*
-     * Resolve the placeholders and drop the sections the extra settings switch off.
-     * A section whose only purpose is a disabled feature is removed rather than
-     * neutralised: on Windows those sections survive with an unused port number, which
-     * is free there but pointless work for nfqws on a router.
+     * Resolve the placeholders the way service.bat sets them up before starting winws.
+     *
+     * Game filter: a part that is on gets the port range, whatever the IPSet filter says.
+     * A part that is off drops its section; Windows keeps it on port 12, which nothing uses.
+     *
+     * IPSet filter, the three states of ipset-all.txt:
+     *   loaded  the ipset-all list from Host lists
+     *   any     no include ipset, which nfqws takes as every address (an empty file on Windows)
+     *   none    an address nothing is sent to, so those sections match nothing
+     *
+     * lists: placeholder -> { path }, see resolveLists()
      */
-    render: function(body, knobs) {
+    render: function(body, knobs, lists) {
         let tcp_on = (knobs.game == 'all' || knobs.game == 'tcp');
         let udp_on = (knobs.game == 'all' || knobs.game == 'udp');
-        let ipset_on = (knobs.ipset != 'none');
+        let loaded = (knobs.ipset == 'loaded');
+        let ipset_opt = /(^|\s)--ipset=<IPSET>(?=\s|$)/g;
+        let ipset_to = loaded ? '--ipset=<IPSET>'
+                     : (knobs.ipset == 'any') ? ''
+                     : '--ipset-ip=' + NO_MATCH_IP;
 
         let kept = this.sections(body).filter(lines => {
             let text = lines.join('\n');
-            if (!ipset_on && text.indexOf('<IPSET>') >= 0) return false;
-            if (!tcp_on   && text.indexOf('<GF_TCP>') >= 0) return false;
-            if (!udp_on   && text.indexOf('<GF_UDP>') >= 0) return false;
+            if (!tcp_on && text.indexOf('<GF_TCP>') >= 0) return false;
+            if (!udp_on && text.indexOf('<GF_UDP>') >= 0) return false;
             return true;
-        }).map(lines => lines.join('\n').trim()).filter(text => text.length > 0);
+        }).map(lines => lines.map(line => {
+            let out = line.replace(ipset_opt, (m, pre) => pre + ipset_to);
+            /* a line that held nothing but a dropped option goes with it */
+            return (out.trim() == '' && line.trim() != '') ? null : out;
+        }).filter(line => line !== null).join('\n').trim()).filter(text => text.length > 0);
 
         let out = kept.join('\n\n--new\n\n');
         out = out.replace(/<GF_TCP>/g, GAME_PORTS);
         out = out.replace(/<GF_UDP>/g, GAME_PORTS);
-        out = out.replace(/<IPSET>/g, this.iplstUserFN);
+        for (let ph in (lists || { })) {
+            /* left in place otherwise, for validateBody() to refuse */
+            if (ph != 'IPSET' || loaded) {
+                out = out.split('<' + ph + '>').join(lists[ph].path);
+            }
+        }
         out = out.replace(/<FAKE_DISCORD>/g, this.fakeNsDir + '/' + knobs.fakeDsc);
         out = out.replace(/<FAKE_GAME>/g, this.fakeNsDir + '/' + knobs.fakeGam);
         return out;
@@ -211,7 +274,7 @@ return baseclass.extend({
         for (let i = 0; i < markers.length; i++) {
             let name = markers[i].slice(1, -1);
             if (NATIVE_MARKERS.indexOf(name) < 0) {
-                return _('Unresolved placeholder %s').format(markers[i]);
+                return _('Unresolved placeholder %h').format(markers[i]);
             }
         }
         return null;
@@ -232,16 +295,90 @@ return baseclass.extend({
         return /--dpi-desync-fooling=[a-z,]*\bts\b/.test(text || '');
     },
 
+    /* ------------------------------------------------------------------ host lists */
+
     /*
-     * In the Flowseal presets the game-filter sections also filter by the IP list, so with
-     * the IP list off they are dropped and the game filter silently does nothing. Worth
-     * saying out loud rather than leaving the user to wonder.
+     * placeholder -> { name, file, path, added } for every list a preset can name.
+     * The entry is found by the section name the Host lists catalog gives it, or by its
+     * URL for a row added before catalog entries had fixed names. One that is not added
+     * still resolves to the catalog file name, so that the preview reads right;
+     * listProblems() is what keeps such a strategy from being applied.
      */
-    gameNeedsIpset: function(body) {
-        return this.sections(body || '').some(lines => {
-            let text = lines.join('\n');
-            return text.indexOf('<GF_') >= 0 && text.indexOf('<IPSET>') >= 0;
+    resolveLists: function() {
+        let out = { };
+        for (let ph in LIST_ROLES) {
+            let item = this.listCatalog.filter(i => i.sid == LIST_ROLES[ph])[0];
+            let by_name = null, by_url = null;
+            uci.sections(this.appName, this.userListSecType, s => {
+                if (s['.name'] == item.sid) {
+                    by_name = s;
+                } else if (!by_url && s.url == item.url) {
+                    by_url = s;
+                }
+            });
+            let sec = by_name || by_url;
+            let file = (sec && sec.file) || item.file;
+            out[ph] = { name: item.name, file: file, path: this.ipsetDir + '/' + file, added: !!sec };
+        }
+        return out;
+    },
+
+    /*
+     * Why a rendered strategy would not work, one message per list file.
+     * nfqws does not start when a list file is missing, and a profile whose include
+     * hostlists (or ipsets) are all empty matches every host (or address), so a strategy
+     * naming a list that has not been downloaded would either stop zapret or desync
+     * everything. Only the files in the lists dir can be checked.
+     *
+     * files: name -> size, see listListFiles()
+     */
+    listProblems: function(text, lists, files) {
+        let dir = this.ipsetDir + '/';
+        let known = { };
+        for (let ph in lists) {
+            known[lists[ph].path] = lists[ph];
+        }
+        let title = path => known[path] ? '%h (%h)'.format(known[path].name, known[path].file)
+                                        : '%h'.format(path);
+        let problems = [ ], seen = { };
+        let report = (path, msg) => {
+            if (!seen[path]) {
+                seen[path] = true;
+                problems.push(msg);
+            }
+        };
+
+        this.sections(text).forEach(lines => {
+            let include = { hostlist: [ ], ipset: [ ] };
+            let inline = { hostlist: false, ipset: false };
+            lines.join(' ').split(/\s+/).forEach(tok => {
+                let m = tok.match(/^--(hostlist|ipset)(-exclude)?=(.+)$/);
+                if (!m) {
+                    if (/^--hostlist-domains=./.test(tok)) inline.hostlist = true;
+                    if (/^--ipset-ip=./.test(tok))         inline.ipset = true;
+                    return;
+                }
+                let path = m[3];
+                if (path.indexOf(dir) != 0) {
+                    if (!m[2]) inline[m[1]] = true;    /* cannot be checked, trust it */
+                    return;
+                }
+                let size = files[path.slice(dir.length)];
+                if (size == null) {
+                    report(path, !known[path]       ? _('%s does not exist').format(title(path))
+                               : known[path].added ? _('%s has not been downloaded yet').format(title(path))
+                               : _('%s is not added on the Host lists tab').format(title(path)));
+                } else if (!m[2]) {
+                    include[m[1]].push({ path: path, size: size });
+                }
+            });
+            for (let kind in include) {
+                if (!inline[kind] && include[kind].length && include[kind].every(f => !f.size)) {
+                    include[kind].forEach(f => report(f.path, _('%s is empty, so its section would apply to everything').format(title(f.path))));
+                }
+            }
         });
+        return problems;
     },
 
     /* ------------------------------------------------------------------ writing */
@@ -290,6 +427,8 @@ return baseclass.extend({
             }, opts);
             this.items = [ ];
             this.fakes = [ ];
+            this.files = { };     /* lists dir: name -> size */
+            this.lists = { };     /* see resolveLists() */
             this.cur = null;      /* { meta, body, id, user } */
             this.template = '';   /* body as edited by the user, placeholders intact */
             this.preview = true;
@@ -320,10 +459,12 @@ return baseclass.extend({
         load: function() {
             let ctx = this.ctx;
             let saved = ctx.getKnobs();
-            return Promise.all([ ctx.listPresets(), ctx.listFakeFiles() ])
-                .then(([ items, fakes ]) => {
+            return Promise.all([ ctx.listPresets(), ctx.listFakeFiles(), ctx.listListFiles() ])
+                .then(([ items, fakes, files ]) => {
                     this.items = items;
                     this.fakes = fakes;
+                    this.files = files;
+                    this.lists = ctx.resolveLists();
                     this.saved = saved;
                     let want = items.filter(i => i.id == saved.preset);
                     let pick = want.length ? want[0] : items[0];
@@ -346,8 +487,9 @@ return baseclass.extend({
             }
             let knobs = this.knobs();
             let template = this.currentTemplate();
+            let rendered = ctx.render(template, knobs, this.lists);
             if (this.preview) {
-                body.value = ctx.render(template, knobs);
+                body.value = rendered;
                 body.readOnly = true;
                 body.classList.add('zp-readonly');
             } else {
@@ -366,9 +508,20 @@ return baseclass.extend({
             if (knobs.game != 'off') {
                 notes.push('⚠ ' + _('Game filter queues ports %s to nfqws - this is a heavy load for a router')
                                     .format('<code>' + GAME_PORTS + '</code>'));
-                if (knobs.ipset == 'none' && ctx.gameNeedsIpset(template)) {
-                    notes.push('⚠ ' + _('The game sections of this preset filter by the IP list. With the IP list disabled they are dropped and the game filter has no effect.'));
+            }
+            if (/--ipset=<IPSET>/.test(template)) {
+                if (knobs.ipset == 'none' && knobs.game != 'off') {
+                    notes.push('⚠ ' + _('IPSet filter "none": the sections filtered by ipset-all, the game ones too, match no address, the same as on Windows. Choose "loaded" to bypass the addresses of the list.'));
                 }
+                if (knobs.ipset == 'any') {
+                    notes.push('⚠ ' + _('IPSet filter "any": the sections filtered by ipset-all apply to every address, which breaks many sites. Do not leave it on for long.'));
+                }
+            }
+            let problems = ctx.listProblems(rendered, this.lists, this.files);
+            if (problems.length) {
+                notes.push('⛔ ' + _('Cannot be applied yet') + ':<br />&nbsp;&nbsp;• ' + problems.join('<br />&nbsp;&nbsp;• ')
+                    + '<br />' + _('Add the lists on the %s tab, press "Update all now" there and open this dialog again.')
+                                    .format('<a href="%s">%s</a>'.format(L.url('admin/services/zapret/lists'), _('Host lists'))));
             }
             this.el('zp_info').innerHTML = notes.join('<br />');
             this.el('zp_del').disabled = !this.cur.user;
@@ -397,8 +550,9 @@ return baseclass.extend({
                 return;
             }
             let knobs = this.knobs();
-            let rendered = ctx.render(this.currentTemplate(), knobs);
-            let err = ctx.validateBody(rendered);
+            let rendered = ctx.render(this.currentTemplate(), knobs, this.lists);
+            let err = ctx.validateBody(rendered)
+                   || ctx.listProblems(rendered, this.lists, this.files).join('; ');
             if (err) {
                 ui.addNotification(null, E('p', _('Unable to apply the preset') + ': ' + err));
                 return;
@@ -549,7 +703,7 @@ return baseclass.extend({
                     ]),
                     E('p', {}, body),
                     E('div', { 'class': 'cbi-section-descr' },
-                        _('Uncheck the box above to edit the template. Placeholders &lt;GF_TCP&gt;, &lt;GF_UDP&gt;, &lt;IPSET&gt;, &lt;FAKE_DISCORD&gt;, &lt;FAKE_GAME&gt; are replaced by the settings below; &lt;HOSTLIST&gt; is expanded by zapret itself.')),
+                        _('Uncheck the box above to edit the template. Placeholders &lt;GF_TCP&gt;, &lt;GF_UDP&gt;, &lt;IPSET&gt;, &lt;FAKE_DISCORD&gt;, &lt;FAKE_GAME&gt; are replaced by the settings below, &lt;LIST_GENERAL&gt;, &lt;LIST_GOOGLE&gt;, &lt;LIST_EXCLUDE&gt;, &lt;IPSET_EXCLUDE&gt; by the files of those lists on the Host lists tab; &lt;HOSTLIST&gt; is expanded by zapret itself.')),
                     E('hr'),
                     this.select('zp_game', _('Game filter'), [
                         [ 'off', _('disabled') ],
@@ -557,9 +711,10 @@ return baseclass.extend({
                         [ 'tcp', _('TCP only') ],
                         [ 'udp', _('UDP only') ],
                     ], saved.game),
-                    this.select('zp_ipset', _('Bypass by IP list'), [
-                        [ 'none', _('disabled') ],
-                        [ 'user', _('User IP entries') + ' (' + this.ctx.iplstUserFN + ')' ],
+                    this.select('zp_ipset', _('IPSet filter'), [
+                        [ 'none',   'none' ],
+                        [ 'any',    'any' ],
+                        [ 'loaded', 'loaded (' + this.lists.IPSET.file + ')' ],
                     ], saved.ipset),
                     this.select('zp_fdsc', _('Discord/STUN UDP fake'), fakeOpts, saved.fakeDsc),
                     this.select('zp_fgam', _('Game UDP fake'), fakeOpts, saved.fakeGam),

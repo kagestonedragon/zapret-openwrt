@@ -194,8 +194,7 @@ echo "    presets in package : $( grep -c 'opt/zapret/presets/.*\.conf' /tmp/lis
 echo "    payloads in package: $( grep -c 'opt/zapret/files/fake/flowseal/.*\.bin' /tmp/list.txt || true )"
 for want in \
 	'opt/zapret/presets/general\.conf' \
-	'opt/zapret/files/fake/flowseal/stun\.bin' \
-	'opt/zapret/ipset/zapret-hosts-flowseal\.txt'; do
+	'opt/zapret/files/fake/flowseal/stun\.bin'; do
 	grep -q "$want" /tmp/list.txt || { echo "FAIL: $want missing from the package"; exit 1; }
 done
 echo "    OK"

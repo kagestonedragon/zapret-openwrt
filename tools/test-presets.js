@@ -5,83 +5,186 @@
 //
 // (any JS shell with readFile()/print() works - e.g. 'd8 tools/test-presets.js')
 
-// Load presets.js the way LuCI does: as a function body with the 'require' names as params.
-var src = readFile('luci-app-zapret/htdocs/luci-static/resources/view/zapret/presets.js');
+var VIEW = 'luci-app-zapret/htdocs/luci-static/resources/view/zapret/';
 
 String.prototype.format = function() {
     var a = arguments, i = 0;
-    return this.replace(/%[sd]/g, function() { return String(a[i++]); });
+    return this.replace(/%[sdh]/g, function() { return String(a[i++]); });
 };
 var _ = function(s) { return s; };
 var baseclass = { extend: function(o) { return o; } };
-var fs = {}, ui = {}, uci = {};
+var fs = {}, ui = {};
+
+// the real catalog, so that the section names and files the presets rely on are the shipped ones
+var ENV = new Function('baseclass', readFile(VIEW + 'env.js'))(baseclass);
+
+// uci only has to answer for the Host lists rows
+var rows = [];
+var uci = {
+    get: function() { return null; },
+    sections: function(conf, type, cb) {
+        rows.filter(function(r) { return r['.type'] == type; }).forEach(cb);
+    },
+};
 var env_tools = { load_env: function(ctx) {
-    ctx.appName        = 'zapret';
-    ctx.presetsDir     = '/opt/zapret/presets';
-    ctx.presetsUserDir = '/opt/zapret/presets/user';
-    ctx.fakeNsDir      = '/opt/zapret/files/fake/flowseal';
-    ctx.iplstUserFN    = '/opt/zapret/ipset/zapret-ip-user.txt';
+    [ 'appName', 'presetsDir', 'presetsUserDir', 'fakeNsDir', 'ipsetDir', 'userListSecType', 'listCatalog' ]
+        .forEach(function(k) { ctx[k] = ENV[k]; });
 } };
 
-var P = new Function('baseclass','fs','ui','uci','env_tools','_', src)
+// Load presets.js the way LuCI does: as a function body with the 'require' names as params.
+var P = new Function('baseclass','fs','ui','uci','env_tools','_', readFile(VIEW + 'presets.js'))
             (baseclass, fs, ui, uci, env_tools, _);
 env_tools.load_env(P);
 
 var fails = 0;
 function check(name, cond, extra) {
-    if (!cond) { fails++; print('FAIL  ' + name + (extra ? '  :: ' + extra : '')); }
+    if (!cond) { fails++; print('FAIL  ' + name + (extra !== undefined ? '  :: ' + extra : '')); }
     else print('ok    ' + name);
 }
+function count(hay, needle) { return hay.split(needle).length - 1; }
+function knobs(game, ipset) { return { game: game, ipset: ipset, fakeDsc: 'quic_x.bin', fakeGam: 'quic_y.bin' }; }
 
-var text = readFile('zapret/presets/general.conf');
-var p = P.parse(text);
+// every catalog list added on Host lists under its own section name
+function catalogRows() {
+    return ENV.listCatalog.map(function(i) {
+        return { '.name': i.sid, '.type': 'userlist', name: i.name, file: i.file, url: i.url };
+    });
+}
+// a router that has downloaded all of them
+function allFiles() {
+    var f = { 'zapret-hosts-user.txt': 300, 'zapret-hosts-user-exclude.txt': 5000, 'zapret-ip-user-exclude.txt': 0 };
+    ENV.listCatalog.forEach(function(i) { f[i.file] = 1000; });
+    return f;
+}
+
+var p = P.parse(readFile('zapret/presets/general.conf'));
 
 check('meta NAME',      p.meta.NAME === 'general', p.meta.NAME);
 check('meta PORTS_TCP', p.meta.PORTS_TCP === '80,443,2053,2083,2087,2096,8443', p.meta.PORTS_TCP);
 check('meta PORTS_UDP', p.meta.PORTS_UDP === '443,19294-19344,50000-50100', p.meta.PORTS_UDP);
 check('template sections == 9', P.sections(p.body).length === 9, P.sections(p.body).length);
+check('template names no shipped list', !/zapret-hosts-(flowseal|google)|zapret-ip-exclude/.test(p.body));
+check('template uses the list placeholders',
+      [ '<LIST_GENERAL>', '<LIST_GOOGLE>', '<LIST_EXCLUDE>', '<IPSET_EXCLUDE>', '<IPSET>' ]
+          .every(function(ph) { return p.body.indexOf(ph) >= 0; }));
 
-// --- defaults: game filter off, no ip list
-var off = { game:'off', ipset:'none', fakeDsc:'D.bin', fakeGam:'G.bin' };
-var r1 = P.render(p.body, off);
-check('off: no <IPSET>',       r1.indexOf('<IPSET>') < 0);
-check('off: no <GF_',          r1.indexOf('<GF_') < 0);
-check('off: no dead port 12',  r1.indexOf('=12') < 0);
-check('off: no <FAKE_',        r1.indexOf('<FAKE_') < 0);
-check('off: starts with comment', r1.indexOf('--comment=preset_general') === 0, r1.slice(0,40));
-check('off: 5 sections left',  P.sections(r1).length === 5, P.sections(r1).length);
-check('off: no leading --new', !/^--new/m.test(r1.split('\n')[0]));
-check('off: validate clean',   P.validateBody(r1) === null, P.validateBody(r1));
+// --- Host lists
+rows = catalogRows();
+var lists = P.resolveLists();
+check('lists: general file', lists.LIST_GENERAL.path === '/opt/zapret/ipset/flowseal-general.txt', lists.LIST_GENERAL.path);
+check('lists: ipset-all file', lists.IPSET.path === '/opt/zapret/ipset/flowseal-ipset-all.txt', lists.IPSET.path);
+check('lists: all added', Object.keys(lists).every(function(k) { return lists[k].added; }));
 
-var po = P.renderPorts(p.meta, off);
+// a row from before catalog entries had fixed section names, with the file renamed
+rows = [ { '.name': 'cfg0a1b2c', '.type': 'userlist', file: 'my-general.txt', url: ENV.listCatalog[0].url } ];
+var old = P.resolveLists();
+check('lists: found by url', old.LIST_GENERAL.path === '/opt/zapret/ipset/my-general.txt' && old.LIST_GENERAL.added, old.LIST_GENERAL.path);
+check('lists: not added still resolves', old.LIST_GOOGLE.path === '/opt/zapret/ipset/flowseal-google.txt' && !old.LIST_GOOGLE.added);
+rows = catalogRows();
+
+// --- defaults: game filter off, IPSet none
+var r1 = P.render(p.body, knobs('off', 'none'), lists);
+check('off: game sections dropped',   P.sections(r1).length === 7, P.sections(r1).length);
+check('off: no placeholders',         !/<[A-Z_]+>/.test(r1));
+check('off: none matches no address', count(r1, '--ipset-ip=203.0.113.113/32') === 2, count(r1, '--ipset-ip='));
+check('off: no include ipset file',   r1.indexOf('--ipset=') < 0);
+check('off: general list',  r1.indexOf('--hostlist=/opt/zapret/ipset/flowseal-general.txt') >= 0);
+check('off: google list',   r1.indexOf('--hostlist=/opt/zapret/ipset/flowseal-google.txt') >= 0);
+check('off: exclude list',  r1.indexOf('--hostlist-exclude=/opt/zapret/ipset/flowseal-exclude.txt') >= 0);
+check('off: ipset exclude', r1.indexOf('--ipset-exclude=/opt/zapret/ipset/flowseal-ipset-exclude.txt') >= 0);
+check('off: user lists kept', r1.indexOf('--hostlist=/opt/zapret/ipset/zapret-hosts-user.txt') >= 0);
+check('off: starts with comment', r1.indexOf('--comment=preset_general') === 0, r1.slice(0, 40));
+check('off: validate clean', P.validateBody(r1) === null, P.validateBody(r1));
+
+var po = P.renderPorts(p.meta, knobs('off', 'none'));
 check('off: tcp ports', po.tcp === '80,443,2053,2083,2087,2096,8443', po.tcp);
 check('off: udp ports', po.udp === '443,19294-19344,50000-50100', po.udp);
 
-// --- everything on
-var on = { game:'all', ipset:'user', fakeDsc:'quic_x.bin', fakeGam:'quic_y.bin' };
-var r2 = P.render(p.body, on);
-check('on: 9 sections',        P.sections(r2).length === 9, P.sections(r2).length);
-check('on: game range',        r2.indexOf('--filter-tcp=1024-65535') >= 0);
-check('on: ipset path',        r2.indexOf('--ipset=/opt/zapret/ipset/zapret-ip-user.txt') >= 0);
-check('on: discord fake',      r2.indexOf('/flowseal/quic_x.bin') >= 0);
-check('on: game fake',         r2.indexOf('/flowseal/quic_y.bin') >= 0);
-check('on: no placeholders',   !/<(?!HOSTLIST)/.test(r2));
-check('on: validate clean',    P.validateBody(r2) === null, P.validateBody(r2));
+// --- game filter on, IPSet none: the ports still go into the strategy, as on Windows
+var r2 = P.render(p.body, knobs('all', 'none'), lists);
+check('all+none: 9 sections',     P.sections(r2).length === 9, P.sections(r2).length);
+check('all+none: tcp game range', r2.indexOf('--filter-tcp=1024-65535') >= 0);
+check('all+none: udp game range', r2.indexOf('--filter-udp=1024-65535') >= 0);
+check('all+none: 4 no-match ipsets', count(r2, '--ipset-ip=203.0.113.113/32') === 4, count(r2, '--ipset-ip='));
 
-var pn = P.renderPorts(p.meta, on);
-check('on: tcp ports', pn.tcp === '80,443,2053,2083,2087,2096,8443,1024-65535', pn.tcp);
-check('on: udp ports', pn.udp === '443,19294-19344,50000-50100,1024-65535', pn.udp);
+// --- IPSet loaded
+var r3 = P.render(p.body, knobs('all', 'loaded'), lists);
+check('all+loaded: 9 sections',  P.sections(r3).length === 9, P.sections(r3).length);
+check('all+loaded: ipset-all',   count(r3, '--ipset=/opt/zapret/ipset/flowseal-ipset-all.txt') === 4);
+check('all+loaded: no --ipset-ip', r3.indexOf('--ipset-ip') < 0);
+check('all+loaded: discord fake', r3.indexOf('/flowseal/quic_x.bin') >= 0);
+check('all+loaded: game fake',    r3.indexOf('/flowseal/quic_y.bin') >= 0);
+check('all+loaded: no placeholders', !/<[A-Z_]+>/.test(r3));
+check('all+loaded: validate clean', P.validateBody(r3) === null, P.validateBody(r3));
+
+var pn = P.renderPorts(p.meta, knobs('all', 'loaded'));
+check('all: tcp ports', pn.tcp === '80,443,2053,2083,2087,2096,8443,1024-65535', pn.tcp);
+check('all: udp ports', pn.udp === '443,19294-19344,50000-50100,1024-65535', pn.udp);
+
+// --- IPSet any: no include ipset, which nfqws takes as every address
+var r4 = P.render(p.body, knobs('all', 'any'), lists);
+check('all+any: 9 sections', P.sections(r4).length === 9, P.sections(r4).length);
+check('all+any: no include ipset', r4.indexOf('--ipset=') < 0 && r4.indexOf('--ipset-ip') < 0);
+check('all+any: excludes kept', count(r4, '--ipset-exclude=') === count(r3, '--ipset-exclude='));
+check('all+any: no blank lines left', P.sections(r4).every(function(ls) {
+    return ls.join('\n').trim().split('\n').every(function(l) { return l.trim() !== ''; });
+}));
 
 // --- tcp only
-var tcp = { game:'tcp', ipset:'user', fakeDsc:'a.bin', fakeGam:'b.bin' };
-var r3 = P.render(p.body, tcp);
-check('tcp: has filter-tcp range', r3.indexOf('--filter-tcp=1024-65535') >= 0);
-check('tcp: no filter-udp range',  r3.indexOf('--filter-udp=1024-65535') < 0);
-check('tcp: udp ports unchanged',  P.renderPorts(p.meta, tcp).udp === '443,19294-19344,50000-50100');
-// game sections of these presets filter by IP list, so ipset=none drops them entirely
-var tcp_noip = { game:'tcp', ipset:'none', fakeDsc:'a.bin', fakeGam:'b.bin' };
-check('tcp+noip: game section dropped', P.render(p.body, tcp_noip).indexOf('1024-65535') < 0);
-check('tcp+noip: warning fires',        P.gameNeedsIpset(p.body) === true);
+var r5 = P.render(p.body, knobs('tcp', 'loaded'), lists);
+check('tcp: has filter-tcp range', r5.indexOf('--filter-tcp=1024-65535') >= 0);
+check('tcp: no filter-udp range',  r5.indexOf('--filter-udp=1024-65535') < 0);
+check('tcp: udp ports unchanged',  P.renderPorts(p.meta, knobs('tcp', 'loaded')).udp === '443,19294-19344,50000-50100');
+
+// --- hand-edited templates
+var hand = '--filter-tcp=443 --ipset=<IPSET> --dpi-desync=fake';
+check('inline: any', P.render(hand, knobs('off', 'any'), lists).replace(/\s+/g, ' ') === '--filter-tcp=443 --dpi-desync=fake');
+check('inline: none', P.render(hand, knobs('off', 'none'), lists).replace(/\s+/g, ' ')
+                      === '--filter-tcp=443 --ipset-ip=203.0.113.113/32 --dpi-desync=fake');
+check('stray <IPSET> is refused unless loaded', P.validateBody(P.render('--ipset-exclude=<IPSET>', knobs('off', 'none'), lists)) !== null);
+check('legacy paths become placeholders',
+      P.upgradeBody('--hostlist=/opt/zapret/ipset/zapret-hosts-flowseal.txt\n--hostlist-exclude=/opt/zapret/ipset/zapret-hosts-flowseal-exclude.txt')
+      === '--hostlist=<LIST_GENERAL>\n--hostlist-exclude=<LIST_EXCLUDE>');
+
+// --- what keeps a strategy from being applied
+var files = allFiles(), pr;
+pr = P.listProblems(r3, lists, files);
+check('problems: none when downloaded', pr.length === 0, pr.join(' | '));
+
+files = allFiles(); delete files['flowseal-general.txt'];
+pr = P.listProblems(r1, lists, files);
+check('problems: not downloaded, reported once', pr.length === 1 && /flowseal-general\.txt.*downloaded/.test(pr[0]), pr.join(' | '));
+
+rows = catalogRows().filter(function(r) { return r['.name'] != 'fs_google'; });
+var partial = P.resolveLists();
+files = allFiles(); delete files['flowseal-google.txt'];
+pr = P.listProblems(P.render(p.body, knobs('off', 'none'), partial), partial, files);
+check('problems: not added on Host lists', pr.length === 1 && pr[0].indexOf('not added') >= 0, pr.join(' | '));
+rows = catalogRows();
+
+files = allFiles(); files['flowseal-google.txt'] = 0;
+pr = P.listProblems(r1, lists, files);
+check('problems: sole include list empty', pr.length === 1 && pr[0].indexOf('empty') >= 0, pr.join(' | '));
+
+files = allFiles(); files['zapret-hosts-user.txt'] = 0;
+pr = P.listProblems(r1, lists, files);
+check('problems: empty user list next to a filled one', pr.length === 0, pr.join(' | '));
+
+files = allFiles(); files['flowseal-ipset-all.txt'] = 0;
+pr = P.listProblems(r3, lists, files);
+check('problems: empty ipset-all when loaded', pr.length === 1 && pr[0].indexOf('flowseal-ipset-all.txt') >= 0, pr.join(' | '));
+check('problems: ipset-all unused by none', P.listProblems(r2, lists, files).length === 0);
+
+files = allFiles(); files['flowseal-exclude.txt'] = 0; files['flowseal-ipset-exclude.txt'] = 0;
+pr = P.listProblems(r3, lists, files);
+check('problems: empty excludes are fine', pr.length === 0, pr.join(' | '));
+
+files = allFiles(); delete files['zapret-ip-user-exclude.txt'];
+pr = P.listProblems(r3, lists, files);
+check('problems: missing package file', pr.length === 1 && pr[0].indexOf('does not exist') >= 0, pr.join(' | '));
+
+check('problems: inline domains count as filled', P.listProblems('--filter-tcp=443 --hostlist-domains=discord.media', lists, {}).length === 0);
+check('problems: lists outside the dir are trusted', P.listProblems('--filter-tcp=443 --hostlist=/tmp/x.txt', lists, {}).length === 0);
 
 // --- guards
 check('reject quote',    P.validateBody('--a="x"') !== null);
@@ -105,30 +208,32 @@ check('round-trip ports', round.meta.PORTS_TCP === p.meta.PORTS_TCP);
 print(fails ? ('\n' + fails + ' FAILURE(S)') : '\nall checks passed');
 
 // ---- sweep every shipped preset through every knob combination
-var ids = [];
-(function(){
-  var names = ['general','general_ALT','general_ALT2','general_ALT3','general_ALT4','general_ALT5',
+var ids = ['general','general_ALT','general_ALT2','general_ALT3','general_ALT4','general_ALT5',
     'general_ALT6','general_ALT7','general_ALT8','general_ALT9','general_ALT10','general_ALT11',
     'general_ALT12','general_ALT13','general_EXP','general_FAKE_TLS_AUTO','general_FAKE_TLS_AUTO_ALT',
     'general_FAKE_TLS_AUTO_ALT2','general_FAKE_TLS_AUTO_ALT3','general_SIMPLE_FAKE',
     'general_SIMPLE_FAKE_ALT','general_SIMPLE_FAKE_ALT2'];
-  for (var i=0;i<names.length;i++) ids.push(names[i]);
-})();
 
-var games = ['off','all','tcp','udp'], ipsets = ['none','user'];
+var games = ['off','all','tcp','udp'], ipsets = ['none','any','loaded'];
 var sweep_fail = 0, combos = 0;
+function sweepFail(msg) { sweep_fail++; print('FAIL ' + msg); }
 for (var i = 0; i < ids.length; i++) {
     var pp = P.parse(readFile('zapret/presets/' + ids[i] + '.conf'));
-    if (!pp.meta.PORTS_TCP || !pp.meta.PORTS_UDP) { sweep_fail++; print('FAIL meta ' + ids[i]); }
+    if (!pp.meta.PORTS_TCP || !pp.meta.PORTS_UDP) sweepFail('meta ' + ids[i]);
     for (var g = 0; g < games.length; g++) for (var s2 = 0; s2 < ipsets.length; s2++) {
         combos++;
-        var k = { game:games[g], ipset:ipsets[s2], fakeDsc:'d.bin', fakeGam:'g.bin' };
-        var out = P.render(pp.body, k);
-        var err = P.validateBody(out);
-        if (err) { sweep_fail++; print('FAIL ' + ids[i] + ' ' + games[g] + '/' + ipsets[s2] + ' -> ' + err); }
-        if (/^--new/m.test(out) && out.split('\n')[0] === '--new') { sweep_fail++; print('FAIL leading --new ' + ids[i]); }
-        if (/--new\s*$/.test(out.trim())) { sweep_fail++; print('FAIL trailing --new ' + ids[i]); }
-        if (out.indexOf('--new\n\n--new') >= 0) { sweep_fail++; print('FAIL empty section ' + ids[i]); }
+        var k = knobs(games[g], ipsets[s2]), tag = ids[i] + ' ' + games[g] + '/' + ipsets[s2];
+        var out = P.render(pp.body, k, lists);
+        var err = P.validateBody(out) || P.listProblems(out, lists, allFiles()).join('; ');
+        if (err) sweepFail(tag + ' -> ' + err);
+        if (out.split('\n')[0] === '--new') sweepFail('leading --new ' + tag);
+        if (/--new\s*$/.test(out.trim())) sweepFail('trailing --new ' + tag);
+        if (out.indexOf('--new\n\n--new') >= 0) sweepFail('empty section ' + tag);
+        var tcp_on = (games[g] == 'all' || games[g] == 'tcp'), udp_on = (games[g] == 'all' || games[g] == 'udp');
+        if ((pp.body.indexOf('<GF_TCP>') >= 0 && tcp_on) != (out.indexOf('--filter-tcp=1024-65535') >= 0)) sweepFail('game tcp ' + tag);
+        if ((pp.body.indexOf('<GF_UDP>') >= 0 && udp_on) != (out.indexOf('--filter-udp=1024-65535') >= 0)) sweepFail('game udp ' + tag);
+        if ((ipsets[s2] == 'loaded') != (out.indexOf('--ipset=') >= 0)) sweepFail('ipset ' + tag);
+        if ((ipsets[s2] == 'none') != (out.indexOf('--ipset-ip=') >= 0)) sweepFail('ipset-ip ' + tag);
     }
 }
 print('\nsweep: ' + ids.length + ' presets x ' + (games.length*ipsets.length) + ' combos = ' + combos + ' renders, ' + sweep_fail + ' failures');

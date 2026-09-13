@@ -337,7 +337,7 @@ return view.extend({
         s.title = _('Remote lists');
 
         o = s.option(form.Button, '_catalog_btn', _('Repository lists'),
-                     _('Add ready-made lists from the Flowseal/zapret-discord-youtube repository.'));
+                     _('Add ready-made lists from the Flowseal/zapret-discord-youtube repository. The strategy presets take their lists from here.'));
         o.inputtitle = _('Add from repository');
         o.inputstyle = 'add btn';
         o.onclick = L.bind(function() {

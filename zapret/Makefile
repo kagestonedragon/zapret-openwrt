@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=zapret
 PKG_VERSION:=72.20260307
-PKG_RELEASE:=20
+PKG_RELEASE:=21
 
 PKG_MAINTAINER:=bol-van
 PKG_LICENSE:=MIT
@@ -109,10 +109,6 @@ define Package/$(PKG_NAME)/install
 	$(CP)                ./files/* $(1)$(ZAPRET_DIR)/files/
 	$(INSTALL_DIR) $(1)$(ZAPRET_DIR)/ipset
 	$(CP) $(PKG_BUILD_DIR)/ipset/* $(1)$(ZAPRET_DIR)/ipset/
-	# Vendor host lists used by the converted presets.
-	# Package data, not conffiles: they must be refreshed on upgrade.
-	$(INSTALL_DATA) ./ipset/zapret-hosts-flowseal.txt         $(1)$(ZAPRET_DIR)/ipset/
-	$(INSTALL_DATA) ./ipset/zapret-hosts-flowseal-exclude.txt $(1)$(ZAPRET_DIR)/ipset/
 	# Strategy presets (converted offline by tools/flowseal2preset.py)
 	$(INSTALL_DIR) $(1)$(ZAPRET_DIR)/presets
 	$(CP) ./presets/*.conf $(1)$(ZAPRET_DIR)/presets/
@@ -235,6 +231,11 @@ if [ -z "$${IPKG_INSTROOT}" ]; then
 	if [ ! -d "$${ZAPRET_DIR}" ]; then
 		mkdir -p $${ZAPRET_DIR}
 	fi
+	# the Flowseal lists are not shipped any more, but a strategy applied from an older
+	# preset still names them: keep a copy, postinst decides whether it is needed
+	for fn in zapret-hosts-flowseal.txt zapret-hosts-flowseal-exclude.txt; do
+		[ -f "$${ZAPRET_DIR}/ipset/$${fn}" ] && cp -f "$${ZAPRET_DIR}/ipset/$${fn}" "$${ZAPRET_DIR}/ipset/$${fn}.keep"
+	done
 	if [ ! -f "/opt/zapret/ipset/zapret-hosts-google.txt" ]; then
 		if [ -f "/opt/zapret/ipset/zapret-hosts-user.txt" ]; then
 			CFGLISTHASH=$$( md5sum "/opt/zapret/ipset/zapret-hosts-user.txt" | awk '{print $$1;}' )
@@ -291,6 +292,16 @@ if [ -z "$${IPKG_INSTROOT}" ]; then
 	/opt/zapret/sync_config.sh
 	# restore cron task for auto-updated host/IP lists
 	/opt/zapret/update-lists.sh -S >/dev/null 2>&1
+	# nfqws does not start without a list it is given: put back the Flowseal lists the
+	# strategy still names, until a preset is applied again
+	for fn in zapret-hosts-flowseal.txt zapret-hosts-flowseal-exclude.txt; do
+		[ -f "$${ZAPRET_DIR}/ipset/$${fn}.keep" ] || continue
+		if [ ! -f "$${ZAPRET_DIR}/ipset/$${fn}" ] && grep -q "/ipset/$${fn}" "$${ZAPRET_CONFIG}"; then
+			mv -f "$${ZAPRET_DIR}/ipset/$${fn}.keep" "$${ZAPRET_DIR}/ipset/$${fn}"
+		else
+			rm -f "$${ZAPRET_DIR}/ipset/$${fn}.keep"
+		fi
+	done
 	# check main config
 	sh -n "$${ZAPRET_CONFIG}" 2>/dev/null || cp -f "$${ZAPRET_CONFIG_DEF}" "$${ZAPRET_CONFIG}"
 	sh -n "$${ZAPRET_CONFIG}" 2>/dev/null || exit 58

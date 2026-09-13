@@ -5,6 +5,7 @@
 			"cgi-io": [ "exec" ],
 			"file": {
 				"/opt/zapret/config": [ "read" ],
+				"/opt/zapret/ipset": [ "read" ],
 				"/opt/zapret/ipset/*": [ "read" ],
 				"/opt/zapret/presets": [ "read" ],
 				"/opt/zapret/presets/user": [ "read" ],

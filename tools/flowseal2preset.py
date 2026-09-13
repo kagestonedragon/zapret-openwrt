@@ -11,7 +11,9 @@
 # Output:
 #   zapret/presets/*.conf              converted presets (package data, refreshed on upgrade)
 #   zapret/files/fake/flowseal/*.bin   fake payloads, Windows basenames kept verbatim
-#   zapret/ipset/zapret-hosts-flowseal*.txt       vendor host lists
+#
+# The host and IP lists are not copied: the presets name them by placeholder, and LuCI fills
+# in the files of the Host lists tab, which downloads them from the same repository.
 #
 # The payloads live in their own "flowseal/" namespace on purpose: zapret-openwrt already
 # ships a file called tls_clienthello_max_ru.bin whose contents differ from the Windows file
@@ -30,24 +32,18 @@ FAKE_SUBDIR = 'flowseal'
 FAKE_DIR = '/opt/zapret/files/fake/' + FAKE_SUBDIR
 IPSET_DIR = '/opt/zapret/ipset'
 
-# %LISTS%<name>  ->  on-router path, or a placeholder resolved by the GUI at apply time.
+# %LISTS%<name>  ->  placeholder resolved by the GUI at apply time, or on-router path.
+# The lists Flowseal maintains become placeholders for the files of the matching Host lists
+# entries. The *-user lists hold the user's own entries and map onto zapret's files for that.
 LIST_MAP = {
-    'list-general.txt':       IPSET_DIR + '/zapret-hosts-flowseal.txt',
-    'list-general-user.txt':  IPSET_DIR + '/zapret-hosts-user.txt',
-    'list-google.txt':        IPSET_DIR + '/zapret-hosts-google.txt',
-    'list-exclude.txt':       IPSET_DIR + '/zapret-hosts-flowseal-exclude.txt',
-    'list-exclude-user.txt':  IPSET_DIR + '/zapret-hosts-user-exclude.txt',
-    'ipset-exclude.txt':      IPSET_DIR + '/zapret-ip-exclude.txt',
-    'ipset-exclude-user.txt': IPSET_DIR + '/zapret-ip-user-exclude.txt',
+    'list-general.txt':       '<LIST_GENERAL>',
+    'list-google.txt':        '<LIST_GOOGLE>',
+    'list-exclude.txt':       '<LIST_EXCLUDE>',
+    'ipset-exclude.txt':      '<IPSET_EXCLUDE>',
     'ipset-all.txt':          '<IPSET>',
-}
-
-# Vendor lists copied into the package (source basename -> dest basename in zapret/ipset/).
-# The Makefile mirrors ./ipset/zapret*.txt into /opt/zapret/ipset_def/ on its own; an explicit
-# install rule puts these two into /opt/zapret/ipset/ as refreshable package data.
-VENDOR_LISTS = {
-    'list-general.txt': 'zapret-hosts-flowseal.txt',
-    'list-exclude.txt': 'zapret-hosts-flowseal-exclude.txt',
+    'list-general-user.txt':  IPSET_DIR + '/zapret-hosts-user.txt',
+    'list-exclude-user.txt':  IPSET_DIR + '/zapret-hosts-user-exclude.txt',
+    'ipset-exclude-user.txt': IPSET_DIR + '/zapret-ip-user-exclude.txt',
 }
 
 # %BIN%<name> -> placeholder, for the two mutable "active fake" slots of service.bat.
@@ -286,7 +282,6 @@ def main():
     version = read_version(win_root)
     presets_dir = os.path.join(repo, 'zapret', 'presets')
     fake_dir = os.path.join(repo, 'zapret', 'files', 'fake', FAKE_SUBDIR)
-    ipset_dir = os.path.join(repo, 'zapret', 'ipset')
 
     sources = sorted(glob.glob(os.path.join(win_root, 'general*.bat')))
     if not sources:
@@ -344,13 +339,6 @@ def main():
         with open(src, 'rb') as fh:
             emit(os.path.join(fake_dir, base), fh.read(), binary=True)
 
-    for src_base, dst_base in sorted(VENDOR_LISTS.items()):
-        src = os.path.join(win_root, 'lists', src_base)
-        if not os.path.isfile(src):
-            sys.exit('error: vendor list %s is missing from %s/lists' % (src_base, win_root))
-        with open(src, 'rb') as fh:
-            emit(os.path.join(ipset_dir, dst_base), fh.read(), binary=True)
-
     # stale presets from a previous run (upstream renamed or dropped a .bat)
     for path in sorted(glob.glob(os.path.join(presets_dir, '*.conf'))):
         if os.path.splitext(os.path.basename(path))[0] not in rendered:
@@ -358,8 +346,8 @@ def main():
             if not args.check:
                 os.remove(path)
 
-    print('%d presets, %d payloads, %d vendor lists  (upstream %s)'
-          % (len(rendered), len(all_fakes), len(VENDOR_LISTS), version))
+    print('%d presets, %d payloads  (upstream %s)'
+          % (len(rendered), len(all_fakes), version))
     for name in ACTIVE_FAKE_DEFAULTS.values():
         if name not in all_fakes:
             print('warning: default active fake %s was not shipped' % name, file=sys.stderr)

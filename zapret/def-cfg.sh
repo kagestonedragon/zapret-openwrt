@@ -41,6 +41,7 @@ function set_cfg_reset_values
 		set $cfgname.config.NFQWS_PORTS_UDP_KEEPALIVE='0'
 		# strategy preset options (consumed by the LuCI preset picker)
 		# NFQWS_PRESET is intentionally left unset: absent means "no preset applied"
+		# GAME_FILTER: off | all | tcp | udp, IPSET_MODE: none | any | loaded (as in service.bat)
 		set $cfgname.config.GAME_FILTER='off'
 		set $cfgname.config.IPSET_MODE='none'
 		set $cfgname.config.FAKE_DISCORD_UDP='quic_initial_steamcommunity_com.bin'

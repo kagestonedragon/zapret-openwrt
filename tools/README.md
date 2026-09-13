@@ -19,7 +19,8 @@ It writes, and the result is committed:
 |---|---|---|
 | `zapret/presets/*.conf` | `/opt/zapret/presets/` | no — refreshed on upgrade |
 | `zapret/files/fake/flowseal/*.bin` | `/opt/zapret/files/fake/flowseal/` | no |
-| `zapret/ipset/zapret-hosts-flowseal*.txt` | `/opt/zapret/ipset/` | no |
+
+The host and IP lists are not part of the output, see below.
 
 `--check` writes nothing and exits non-zero if the committed tree is stale, which is what a
 CI job would run.
@@ -31,8 +32,11 @@ CI job would run.
 * `--wf-tcp` / `--wf-udp` are WinDivert-only. They have no nfqws counterpart, so their ports
   move out of the strategy body into the preset's `PORTS_TCP` / `PORTS_UDP` metadata, which
   the GUI writes to `NFQWS_PORTS_TCP` / `NFQWS_PORTS_UDP`.
-* `%LISTS%…` paths are remapped onto `/opt/zapret/ipset/…`; the two vendor lists Flowseal
-  maintains are copied into the package.
+* The lists Flowseal maintains are not copied. `%LISTS%list-general.txt`, `list-google.txt`,
+  `list-exclude.txt`, `ipset-exclude.txt` and `ipset-all.txt` become placeholders, filled in
+  with the files of the matching entries on the Host lists tab, which downloads them from the
+  same repository. The `*-user` lists hold the user's own entries and map onto zapret's
+  `zapret-hosts-user.txt`, `zapret-hosts-user-exclude.txt` and `zapret-ip-user-exclude.txt`.
 * `%BIN%…` payloads are remapped onto `/opt/zapret/files/fake/flowseal/…`.
 
   The `flowseal/` namespace is deliberate: this repo already ships a
@@ -45,13 +49,24 @@ CI job would run.
   | placeholder | resolved from | Windows counterpart |
   |---|---|---|
   | `<GF_TCP>` `<GF_UDP>` | `GAME_FILTER` | `%GameFilterTCP%` / `%GameFilterUDP%` |
-  | `<IPSET>` | `IPSET_MODE` | the `lists/ipset-all.txt` tri-state |
+  | `<IPSET>` | `IPSET_MODE` (`none` / `any` / `loaded`) and the Host lists entry `fs_ipset_all` | the `lists/ipset-all.txt` tri-state |
+  | `<LIST_GENERAL>` `<LIST_GOOGLE>` `<LIST_EXCLUDE>` `<IPSET_EXCLUDE>` | Host lists entries `fs_general`, `fs_google`, `fs_exclude`, `fs_ipset_exclude` | `lists/list-general.txt`, `list-google.txt`, `list-exclude.txt`, `ipset-exclude.txt` |
   | `<FAKE_DISCORD>` | `FAKE_DISCORD_UDP` | `bin/ACTIVE_DISCORD_UDP.bin` |
   | `<FAKE_GAME>` | `FAKE_GAME_UDP` | `bin/ACTIVE_GAME_UDP.bin` |
 
   Placeholders never reach `NFQWS_OPT` — upstream zapret only expands `<HOSTLIST>` and
-  `<HOSTLIST_NOAUTO>` itself and would hand anything else to nfqws verbatim. A section whose
-  feature is switched off is dropped rather than neutralised.
+  `<HOSTLIST_NOAUTO>` itself and would hand anything else to nfqws verbatim.
+
+  The game filter and the IPSet filter behave as `service.bat` sets them up. A game filter
+  part that is on puts its port range into the strategy and into `NFQWS_PORTS_*`, whatever
+  the IPSet filter says; one that is off drops its section (Windows keeps it on port 12).
+  `loaded` points `--ipset=` at the `fs_ipset_all` list, `any` drops the option (no include
+  ipset means every address, as the empty file does on Windows), and `none` swaps it for
+  `--ipset-ip=203.0.113.113/32`, the address `service.bat` writes into `ipset-all.txt`.
+
+  A preset is not applied while a list file it names is missing, or while all include lists
+  of a section are empty: nfqws does not start without the file, and a profile whose include
+  lists are all empty applies to everything.
 * Output is constrained to one `--option` per line and rejects `"` `` ` `` `$` `&` `\`,
   because `/opt/zapret/config` is sourced as root and rewritten with `sed`, and
   `is_valid_config` does not catch the resulting corruption.
@@ -74,9 +89,9 @@ Packages land in `out/`.
 Feeds and downloads are cached in named Docker volumes (`zapret-sdk-dl-*`,
 `zapret-sdk-feeds-*`), so only the first build pays for cloning the feeds.
 
-After building, the script unpacks the result and fails if the presets, the fake payloads
-or the vendor host lists did not make it in — a broken install rule should not produce a
-package that merely looks fine.
+After building, the script unpacks the result and fails if the presets or the fake payloads
+did not make it in — a broken install rule should not produce a package that merely looks
+fine.
 
 `.github/workflows/build-dev.yml` runs the same thing on GitHub Actions when you would
 rather not build locally. (The release workflow, `build.yml`, always checks out
