@@ -95,7 +95,6 @@ function check_url
 function check_content
 {
 	local fn="$1"
-	local type="$2"
 	local sz1 sz2 good
 	if [ ! -s "$fn" ]; then
 		echo "  ERROR: downloaded file is empty"
@@ -111,13 +110,10 @@ function check_content
 		echo "  ERROR: downloaded file contains binary data"
 		return 1
 	fi
-	if [ "$type" = "ipset" ]; then
-		good=$( grep -cE '^[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]{1,2})?[[:space:]]*$|^[[:space:]]*[0-9a-fA-F:]+:[0-9a-fA-F:]*(/[0-9]{1,3})?[[:space:]]*$' "$fn" )
-	else
-		good=$( grep -cE '^[[:space:]]*\^?[A-Za-z0-9*_-]+(\.[A-Za-z0-9*_-]+)*[[:space:]]*$' "$fn" )
-	fi
+	# a host name, or an IPv4/IPv6 address with an optional prefix length
+	good=$( grep -cE '^[[:space:]]*\^?[A-Za-z0-9*_-]+(\.[A-Za-z0-9*_-]+)*[[:space:]]*$|^[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]{1,2})?[[:space:]]*$|^[[:space:]]*[0-9a-fA-F:]+:[0-9a-fA-F:]*(/[0-9]{1,3})?[[:space:]]*$' "$fn" )
 	if [ "${good:-0}" -lt 1 ]; then
-		echo "  ERROR: no valid \"$type\" entries found in downloaded file"
+		echo "  ERROR: no host or address entries found in downloaded file"
 		return 1
 	fi
 	return 0
@@ -126,13 +122,12 @@ function check_content
 function download_list
 {
 	local sec="$1"
-	local name file url type autoupdate
+	local name file url autoupdate
 	local dst tmp status rc sz lines
 
 	config_get name       "$sec" name       "$sec"
 	config_get file       "$sec" file       ""
 	config_get url        "$sec" url        ""
-	config_get type       "$sec" type       "hostlist"
 	config_get_bool autoupdate "$sec" autoupdate 0
 
 	[ -n "$opt_section" ] && [ "$opt_section" != "$sec" ] && return 0
@@ -170,7 +165,7 @@ function download_list
 		ZAP_FAILED=$(( ZAP_FAILED + 1 ))
 		return 0
 	fi
-	if ! check_content "$tmp" "$type"; then
+	if ! check_content "$tmp"; then
 		rm -f "$tmp"
 		ZAP_FAILED=$(( ZAP_FAILED + 1 ))
 		return 0

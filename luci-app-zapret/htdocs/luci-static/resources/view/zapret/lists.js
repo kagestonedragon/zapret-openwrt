@@ -223,7 +223,6 @@ return view.extend({
             uci.set(tools.appName, sid, 'name',       oname);
             uci.set(tools.appName, sid, 'file',       file);
             uci.set(tools.appName, sid, 'url',        ourl);
-            uci.set(tools.appName, sid, 'type',       'hostlist');
             uci.set(tools.appName, sid, 'autoupdate', '1');
 
             try {
@@ -255,7 +254,7 @@ return view.extend({
                 E('div', { 'class': 'cbi-value-field' }, btn_own),
             ]),
             E('div', { 'class': 'cbi-value-description' },
-                _('Leave the file name empty to derive it from the list name. Type defaults to hosts and can be changed in the row editor.')),
+                _('Leave the file name empty to derive it from the list name.')),
             own_err,
         ]);
 
@@ -278,7 +277,6 @@ return view.extend({
                 uci.set(tools.appName, item.sid, 'name',       item.name);
                 uci.set(tools.appName, item.sid, 'file',       item.file);
                 uci.set(tools.appName, item.sid, 'url',        item.url);
-                uci.set(tools.appName, item.sid, 'type',       item.type);
                 uci.set(tools.appName, item.sid, 'autoupdate', '1');
             });
             ui.hideModal();
@@ -392,12 +390,6 @@ return view.extend({
         o = s.option(form.Value, 'name', _('Name'));
         o.rmempty = false;
         o.placeholder = _('My list');
-
-        o = s.option(form.ListValue, 'type', _('Type'));
-        o.modalonly = true;
-        o.value('hostlist', _('hosts'));
-        o.value('ipset',    _('IP / subnets'));
-        o.default = 'hostlist';
 
         o = s.option(form.Value, 'file', _('File name'));
         o.rmempty = false;
