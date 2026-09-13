@@ -298,7 +298,7 @@ return view.extend({
 
         let m, s, o;
 
-        m = new form.Map(tools.appName, tools.AppName + ' - ' + _('Host Lists'));
+        m = new form.Map(tools.appName);
 
         /* ----------------------- lists toolbar --------------------------- */
 

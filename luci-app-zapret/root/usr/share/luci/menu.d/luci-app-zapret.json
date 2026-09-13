@@ -36,7 +36,7 @@
 	},
 
 	"admin/services/zapret/lists": {
-		"title": "Remote lists",
+		"title": "Host lists",
 		"order": 25,
 		"action": {
 			"type": "view",
