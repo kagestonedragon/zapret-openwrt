@@ -13,50 +13,6 @@ document.head.appendChild(E('link', {
     href: L.resource('view/zapret/styles.css') + (L.env.resource_version ? '?v=' + L.env.resource_version : '')
 }));
 
-/* the game filter as a checkbox per protocol; the value is off, all, tcp or udp, as service.bat keeps it */
-const UIGameFilter = ui.AbstractElement.extend({
-    __init__: function(value, options) {
-        this.value = value;
-        this.options = Object.assign({ }, options);
-    },
-
-    render: function() {
-        let box = (proto, label) => {
-            let widget = new ui.Checkbox((this.value == 'all' || this.value == proto) ? '1' : '0');
-            let node = widget.render();
-            return {
-                widget: widget,
-                node: E('span', { 'class': 'zp-check' }, [
-                    node, E('label', { 'for': node.querySelector('input').id }, [ label ]),
-                ]),
-            };
-        };
-        this.tcp = box('tcp', 'TCP');
-        this.udp = box('udp', 'UDP');
-        return this.bind(E('div', { 'id': this.options.id, 'class': 'zp-game' }, [ this.tcp.node, this.udp.node ]));
-    },
-
-    bind: function(frame) {
-        this.node = frame;
-        this.setUpdateEvents(frame, 'change');
-        this.setChangeEvents(frame, 'change');
-        dom.bindClassInstance(frame, this);
-        return frame;
-    },
-
-    getValue: function() {
-        let tcp = this.tcp.widget.isChecked();
-        let udp = this.udp.widget.isChecked();
-        return (tcp && udp) ? 'all' : tcp ? 'tcp' : udp ? 'udp' : 'off';
-    },
-
-    setValue: function(value) {
-        this.value = value;
-        this.tcp.widget.setValue((value == 'all' || value == 'tcp') ? '1' : '0');
-        this.udp.widget.setValue((value == 'all' || value == 'udp') ? '1' : '0');
-    },
-});
-
 /*
  * A drop-down whose options may come in groups. A value that is not among them, such as a
  * strategy or payload whose file is gone, stays picked rather than turning into another one.
@@ -136,16 +92,24 @@ const CBISelect = form.Value.extend({
     },
 });
 
-const CBIGameFilter = form.Value.extend({
+/*
+ * The game filter as one checkbox, for TCP and UDP together (service.bat also has TCP or UDP
+ * only). Its values, all and off, are set on the option: form.Flag assigns 1 and 0 when it is
+ * constructed, over anything declared here.
+ */
+const CBIGameFilter = form.Flag.extend({
     __name__: 'CBI.ZapretGameFilter',
 
     write: function() { },
     remove: function() { },
 
-    renderWidget: function(section_id, option_index, cfgvalue) {
-        return new UIGameFilter((cfgvalue != null) ? cfgvalue : this.default, {
-            id: this.cbid(section_id),
-        }).render();
+    /* a config saved with tcp or udp only had the filter on */
+    cfgvalue: function(section_id) {
+        let value = form.Flag.prototype.cfgvalue.apply(this, arguments);
+        if (value == null) {
+            return value;
+        }
+        return ([ 'all', 'tcp', 'udp' ].indexOf(value) >= 0) ? 'all' : 'off';
     },
 });
 
@@ -560,6 +524,8 @@ return view.extend({
         };
 
         o = s.option(CBIGameFilter, 'GAME_FILTER', _('Game Filter'));
+        o.enabled = 'all';
+        o.disabled = 'off';
         o.default = presets.defaults.game;
 
         o = s.option(CBISelect, 'IPSET_MODE', _('IPSet Filter'));

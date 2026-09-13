@@ -38,19 +38,6 @@ select.zp-select
 {
     margin: 4px 0 4px 20px;
 }
-.zp-game
-{
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 20px;
-}
-.zp-check
-{
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
 .zp-error
 {
     color: #e55;
