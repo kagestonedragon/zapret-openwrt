@@ -158,11 +158,16 @@ return view.extend({
         s.title = _('Host lists');
 
         o = s.option(form.Value, tools.listCronParam, _('Auto-update schedule'),
-                     _('Cron schedule for lists marked "Auto-update". Leave empty to disable.'));
+                     _('Cron schedule for lists marked "Auto-update". Leave empty to disable.') + '<br />' +
+                     _('Fields are: minute hour day month weekday.') + ' ' +
+                     _('%s is every day at 05:30, %s every Monday at 05:30, %s every 6 hours.')
+                       .format('<code>30 5 * * *</code>', '<code>30 5 * * 1</code>', '<code>30 */6 * * *</code>'));
         o.placeholder = tools.listCronDefault;
-        o.value('30 5 * * *',   _('Every day at 05:30'));
-        o.value('30 5 * * 1',   _('Every Monday at 05:30'));
-        o.value('30 */6 * * *', _('Every 6 hours'));
+        /* no human-readable labels here: a combobox shows the raw value when closed and the
+           label when open, so a labelled preset reads as a second, different option */
+        o.value('30 5 * * *');
+        o.value('30 5 * * 1');
+        o.value('30 */6 * * *');
         o.rmempty = true;
         o.validate = function(section_id, value) {
             if (!value || value.length == 0) {
