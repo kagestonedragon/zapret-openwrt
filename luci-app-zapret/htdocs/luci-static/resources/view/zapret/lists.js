@@ -68,13 +68,14 @@ return view.extend({
     {
         let used = { };
         uci.sections(tools.appName, tools.userListSecType, (sec) => {
-            if (sec.url)  used['u:' + sec.url]  = true;
-            if (sec.file) used['f:' + sec.file] = true;
+            if (sec['.name']) used['s:' + sec['.name']] = true;
+            if (sec.url)      used['u:' + sec.url]      = true;
+            if (sec.file)     used['f:' + sec.file]     = true;
         });
 
         let boxes = [ ];
         let rows = tools.listCatalog.map(item => {
-            let dup = used['u:' + item.url] || used['f:' + item.file];
+            let dup = used['s:' + item.sid] || used['u:' + item.url] || used['f:' + item.file];
             let box = E('input', { 'type': 'checkbox' });
             if (dup) {
                 box.disabled = true;
@@ -100,7 +101,11 @@ return view.extend({
                     return;
                 }
                 let item = box._item;
-                let sid = uci.add(tools.appName, tools.userListSecType);
+                /* named section: adding the same catalog entry twice hits the same key */
+                if (uci.get(tools.appName, item.sid) != null) {
+                    return;
+                }
+                let sid = uci.add(tools.appName, tools.userListSecType, item.sid);
                 uci.set(tools.appName, sid, 'name',       item.name);
                 uci.set(tools.appName, sid, 'file',       item.file);
                 uci.set(tools.appName, sid, 'url',        item.url);
@@ -157,17 +162,11 @@ return view.extend({
         s.addremove = false;
         s.title = _('Host lists');
 
-        o = s.option(form.Value, tools.listCronParam, _('Auto-update schedule'),
-                     _('Cron schedule for lists marked "Auto-update". Leave empty to disable.') + '<br />' +
-                     _('Fields are: minute hour day month weekday.') + ' ' +
-                     _('%s is every day at 05:30, %s every Monday at 05:30, %s every 6 hours.')
-                       .format('<code>30 5 * * *</code>', '<code>30 5 * * 1</code>', '<code>30 */6 * * *</code>'));
+        o = s.option(form.Value, tools.listCronParam, _('Auto-update schedule'));
         o.placeholder = tools.listCronDefault;
-        /* no human-readable labels here: a combobox shows the raw value when closed and the
-           label when open, so a labelled preset reads as a second, different option */
-        o.value('30 5 * * *');
-        o.value('30 5 * * 1');
-        o.value('30 */6 * * *');
+        o.value('30 5 * * *',   _('Every day at 05:30'));
+        o.value('30 5 * * 1',   _('Every Monday at 05:30'));
+        o.value('30 */6 * * *', _('Every 6 hours'));
         o.rmempty = true;
         o.validate = function(section_id, value) {
             if (!value || value.length == 0) {
@@ -202,8 +201,7 @@ return view.extend({
         /* -------------------------- user lists --------------------------- */
 
         s = m.section(form.GridSection, tools.userListSecType, _('User lists'),
-            _('Files are stored in %s.').format(tools.ipsetDir) + '<br />' +
-            _('A list is not used until it is referenced in NFQWS_OPT as <code>--hostlist=%s/&lt;file&gt;</code> (or <code>--ipset=</code> for IP lists).').format(tools.ipsetDir));
+            _('Files are stored in %s.').format(tools.ipsetDir));
         s.anonymous = true;
         s.addremove = true;
         s.sortable = false;
@@ -218,6 +216,7 @@ return view.extend({
         o.placeholder = _('My list');
 
         o = s.option(form.ListValue, 'type', _('Type'));
+        o.modalonly = true;
         o.value('hostlist', _('hosts'));
         o.value('ipset',    _('IP / subnets'));
         o.default = 'hostlist';
@@ -268,7 +267,7 @@ return view.extend({
         o = s.option(form.Button, '_edit_btn', _('Content'));
         o.editable = true;
         o.modalonly = false;
-        o.inputtitle = _('Edit');
+        o.inputtitle = _('Open');
         o.inputstyle = 'edit btn';
         o.write = function() { };
         o.remove = function() { };
