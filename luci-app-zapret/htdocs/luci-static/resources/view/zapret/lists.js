@@ -125,6 +125,10 @@ return view.extend({
             'type': 'text', 'class': 'cbi-input-text',
             'style': 'width:100%', 'placeholder': _('My list'),
         });
+        let own_file = E('input', {
+            'type': 'text', 'class': 'cbi-input-text',
+            'style': 'width:100%', 'placeholder': _('derived from the name'),
+        });
         let own_url = E('input', {
             'type': 'text', 'class': 'cbi-input-text',
             'style': 'width:100%', 'placeholder': 'https://example.org/list.txt',
@@ -139,11 +143,15 @@ return view.extend({
                 E('div', { 'class': 'cbi-value-field' }, own_name),
             ]),
             E('div', { 'class': 'cbi-value' }, [
+                E('label', { 'class': 'cbi-value-title' }, _('File name')),
+                E('div', { 'class': 'cbi-value-field' }, own_file),
+            ]),
+            E('div', { 'class': 'cbi-value' }, [
                 E('label', { 'class': 'cbi-value-title' }, _('Repository')),
                 E('div', { 'class': 'cbi-value-field' }, own_url),
             ]),
             E('div', { 'class': 'cbi-value-description' },
-                _('The file name is derived from the name. Type defaults to hosts and can be changed in the row editor.')),
+                _('Leave the file name empty to derive it from the list name. Type defaults to hosts and can be changed in the row editor.')),
             own_err,
         ]);
 
@@ -171,25 +179,46 @@ return view.extend({
                 if (used['u:' + ourl]) {
                     return showErr(_('This repository is already in the list'));
                 }
-                let slug = oname.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                if (!slug.length) {
-                    /* a name written in a non-latin script leaves nothing to build a file
-                       name from, so fall back to the last path segment of the url */
-                    slug = ourl.split('?')[0].split('/').pop().toLowerCase()
-                               .replace(/\.[a-z0-9]+$/, '')
-                               .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                let ofile = own_file.value.trim();
+                let file, sid;
+
+                if (ofile.length) {
+                    /* given explicitly: never silently renamed, a clash is an error */
+                    if (!fname_re.test(ofile)) {
+                        return showErr(_('Only letters, digits, dot, dash and underscore are allowed, extension must be .txt'));
+                    }
+                    if (ofile == 'zapret-hosts-auto.txt') {
+                        return showErr(_('This file is managed by nfqws and cannot be used here'));
+                    }
+                    if (used['f:' + ofile]) {
+                        return showErr(_('This file name is already used by another list'));
+                    }
+                    file = ofile;
+                } else {
+                    let slug = oname.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                    if (!slug.length) {
+                        /* a name written in a non-latin script leaves nothing to build a file
+                           name from, so fall back to the last path segment of the url */
+                        slug = ourl.split('?')[0].split('/').pop().toLowerCase()
+                                   .replace(/\.[a-z0-9]+$/, '')
+                                   .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                    }
+                    if (!slug.length) {
+                        slug = 'list';
+                    }
+                    file = slug + '.txt';
+                    for (let n = 2; used['f:' + file]; n++) {
+                        file = slug + '-' + n + '.txt';
+                    }
+                    if (!fname_re.test(file)) {
+                        return showErr(_('The name does not translate into a usable file name'));
+                    }
                 }
-                if (!slug.length) {
-                    slug = 'list';
-                }
-                let file = slug + '.txt';
-                let sid = 'usr_' + slug.replace(/-/g, '_');
-                for (let n = 2; uci.get(tools.appName, sid) != null || used['f:' + file]; n++) {
-                    file = slug + '-' + n + '.txt';
-                    sid = 'usr_' + slug.replace(/-/g, '_') + '_' + n;
-                }
-                if (!fname_re.test(file)) {
-                    return showErr(_('The name does not translate into a usable file name'));
+
+                let base = file.replace(/\.txt$/, '').replace(/[^A-Za-z0-9]+/g, '_');
+                sid = 'usr_' + base;
+                for (let n = 2; uci.get(tools.appName, sid) != null; n++) {
+                    sid = 'usr_' + base + '_' + n;
                 }
                 own = { sid: sid, name: oname, file: file, url: ourl, type: 'hostlist' };
             }
