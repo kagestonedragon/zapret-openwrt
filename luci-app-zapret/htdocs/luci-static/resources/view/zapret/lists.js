@@ -151,7 +151,8 @@ return view.extend({
             try {
                 await map.save();
             } catch(e) {
-                ui.addNotification(null, E('p', _('Unable to save the contents') + ': %s'.format(e.message)));
+                ui.addNotification(_('Could not save the lists'),
+                    E('p', _('The configuration was left unchanged.') + ' ' + e.message), 'error');
                 return;
             }
             let msg = _('Added %d list(s)').format(added);
@@ -228,7 +229,9 @@ return view.extend({
         o.inputstyle = 'apply btn';
         o.onclick = L.bind(function() {
             if (tools.checkUnsavedChanges()) {
-                ui.addNotification(null, E('p', _('You have unapplied changes')));
+                ui.addNotification(_('Unsaved changes'), E('p',
+                    _('Lists are downloaded according to the saved configuration. Press "Save &amp; Apply" first, then start the update.')),
+                    'warning');
                 return;
             }
             return this.openUpdateDialog([ '-a' ], _('Update all lists'));
@@ -310,7 +313,9 @@ return view.extend({
         o.onclick = L.bind(function(ev, section_id) {
             let file = uci.get(tools.appName, section_id, 'file');
             if (!file || !fname_re.test(file)) {
-                ui.addNotification(null, E('p', _('Set a correct file name first')));
+                ui.addNotification(_('No file name'), E('p',
+                    _('Set "File name" in the row editor before opening the contents of the list.')),
+                    'warning');
                 return;
             }
             let name = uci.get(tools.appName, section_id, 'name') || file;
@@ -335,7 +340,9 @@ return view.extend({
             try {
                 await fs.exec(tools.updListsPath, [ '-S' ], null);
             } catch(e) {
-                ui.addNotification(null, E('p', _('Unable to update cron task') + ': %s'.format(e.message)));
+                ui.addNotification(_('Could not update the cron task'), E('p',
+                    _('The lists were saved, but the schedule in %s was not updated.').format('<code>/etc/crontabs/root</code>')
+                    + ' ' + e.message), 'error');
             }
             if (apply_exec) {
                 ui.changes.apply(mode == '0');
