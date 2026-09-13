@@ -66,29 +66,57 @@ return view.extend({
     /* one-click import of the ready-made sources from tools.listCatalog */
     openCatalogDialog: function(map)
     {
-        let used = { };
+        /* rows added before catalog entries got fixed section names are anonymous, so they
+           are matched back by url or file and folded into the one canonical section */
+        let named = { };
+        let legacy = { };
         uci.sections(tools.appName, tools.userListSecType, (sec) => {
-            if (sec['.name']) used['s:' + sec['.name']] = true;
-            if (sec.url)      used['u:' + sec.url]      = true;
-            if (sec.file)     used['f:' + sec.file]     = true;
+            let sname = sec['.name'];
+            if (!sname) {
+                return;
+            }
+            named[sname] = true;
+            tools.listCatalog.forEach(item => {
+                if (sname === item.sid) {
+                    return;
+                }
+                if (sec.url === item.url || sec.file === item.file) {
+                    legacy[item.sid] = (legacy[item.sid] || []).concat(sname);
+                }
+            });
         });
 
         let boxes = [ ];
+        let stale = 0;
         let rows = tools.listCatalog.map(item => {
-            let dup = used['s:' + item.sid] || used['u:' + item.url] || used['f:' + item.file];
+            let dupes = legacy[item.sid] || [ ];
+            let done = named[item.sid] && dupes.length === 0;
+            stale += dupes.length;
+
             let box = E('input', { 'type': 'checkbox' });
-            if (dup) {
+            if (done) {
                 box.disabled = true;
+            } else if (dupes.length) {
+                box.checked = true;
             }
             box._item = item;
+            box._dupes = dupes;
             boxes.push(box);
+
+            let note;
+            if (dupes.length) {
+                note = _('%d duplicate row(s) will be replaced by one').format(dupes.length);
+            } else if (done) {
+                note = _('Already added');
+            } else {
+                note = item.file + ' \u2190 ' + item.url;
+            }
+
             return E('div', { 'style': 'margin-bottom:8px;' },
                 E('label', {}, [
                     box, ' ', E('b', {}, item.name),
-                    ' ', E('em', {}, '(' + item.type + ')'),
                     E('br'),
-                    E('small', { 'style': 'opacity:0.7; margin-left:22px;' },
-                        dup ? _('Already added') : item.file + ' ← ' + item.url),
+                    E('small', { 'style': 'opacity:0.7; margin-left:22px;' }, note),
                 ])
             );
         });
@@ -96,25 +124,28 @@ return view.extend({
         let btn_add = E('button', { 'class': btn_style_action }, _('Add selected'));
         btn_add.onclick = ui.createHandlerFn(this, async () => {
             let added = 0;
+            let removed = 0;
             boxes.forEach(box => {
                 if (box.disabled || !box.checked) {
                     return;
                 }
                 let item = box._item;
-                /* named section: adding the same catalog entry twice hits the same key */
-                if (uci.get(tools.appName, item.sid) != null) {
-                    return;
+                box._dupes.forEach(sname => {
+                    uci.remove(tools.appName, sname);
+                    removed += 1;
+                });
+                if (uci.get(tools.appName, item.sid) == null) {
+                    uci.add(tools.appName, tools.userListSecType, item.sid);
+                    added += 1;
                 }
-                let sid = uci.add(tools.appName, tools.userListSecType, item.sid);
-                uci.set(tools.appName, sid, 'name',       item.name);
-                uci.set(tools.appName, sid, 'file',       item.file);
-                uci.set(tools.appName, sid, 'url',        item.url);
-                uci.set(tools.appName, sid, 'type',       item.type);
-                uci.set(tools.appName, sid, 'autoupdate', '1');
-                added += 1;
+                uci.set(tools.appName, item.sid, 'name',       item.name);
+                uci.set(tools.appName, item.sid, 'file',       item.file);
+                uci.set(tools.appName, item.sid, 'url',        item.url);
+                uci.set(tools.appName, item.sid, 'type',       item.type);
+                uci.set(tools.appName, item.sid, 'autoupdate', '1');
             });
             ui.hideModal();
-            if (added == 0) {
+            if (added == 0 && removed == 0) {
                 return;
             }
             try {
@@ -123,8 +154,11 @@ return view.extend({
                 ui.addNotification(null, E('p', _('Unable to save the contents') + ': %s'.format(e.message)));
                 return;
             }
-            ui.addNotification(null, E('p',
-                _('Added %d list(s). Now press Save &amp; Apply, then Update all now.').format(added)), 'info');
+            let msg = _('Added %d list(s)').format(added);
+            if (removed > 0) {
+                msg += ', ' + _('removed %d duplicate row(s)').format(removed);
+            }
+            ui.addNotification(null, E('p', msg + '. ' + _('Now press Save &amp; Apply, then Update all now.')), 'info');
         });
 
         let btn_cancel = E('button', { 'class': btn_style_warning }, _('Dismiss'));
@@ -133,7 +167,9 @@ return view.extend({
         ui.showModal(_('Add lists from repository'), [
             E('div', { 'class': 'cbi-section' }, [
                 E('div', { 'class': 'cbi-section-descr' },
-                    _('Lists are downloaded into separate files, package files are never overwritten.')),
+                    stale > 0
+                        ? _('%d duplicate row(s) left over from an older version were found. Confirm to fold them into one row per list.').format(stale)
+                        : _('Lists are downloaded into separate files, package files are never overwritten.')),
                 E('div', {}, rows),
             ]),
             E('div', { 'style': 'display:flex; justify-content:space-between; margin-top:1px;' }, [
