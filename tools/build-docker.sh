@@ -213,5 +213,5 @@ Install on the router:
     ssh root@192.168.1.1 'opkg install --force-reinstall /tmp/zapret_*.ipk /tmp/luci-app-zapret_*.ipk'
 
 Then hard-refresh LuCI (Ctrl+Shift+R) and open
-Services -> Zapret -> Settings -> NFQWS options.
+Services -> Zapret -> Strategies.
 EOF

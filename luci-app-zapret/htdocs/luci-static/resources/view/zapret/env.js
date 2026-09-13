@@ -21,7 +21,6 @@ return baseclass.extend({
     fakeNsDir         : '/opt/zapret/files/fake/flowseal',
     custFileMax       : 4,
     custFileTemplate  : '/opt/zapret/ipset/cust%s.txt',
-    nfqws_opt_url     : 'https://github.com/remittor/zapret-openwrt/discussions/168',
 
     ipsetDir          : '/opt/zapret/ipset',
     updListsPath      : '/opt/zapret/update-lists.sh',

@@ -77,6 +77,6 @@ echo "update-lists.sh:    $([ -x /opt/zapret/update-lists.sh ] && echo installed
 REMOTE
 
 echo
-echo "done. open LuCI -> Services -> Zapret -> Settings -> NFQWS options"
+echo "done. open LuCI -> Services -> Zapret -> Strategies"
 echo "                        and Services -> Zapret -> Host lists"
 echo "and HARD-refresh the browser (Ctrl+Shift+R) - LuCI caches the JS."

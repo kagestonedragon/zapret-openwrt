@@ -6,7 +6,7 @@
 'require view.zapret.env as env_tools';
 
 /*
- * Strategy presets for the NFQWS options tab.
+ * Strategy presets for the Strategies tab.
  *
  * A preset file is metadata lines, then a '[OPT]' marker, then the strategy body
  * (one --option per line, blank line between --new sections):

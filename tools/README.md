@@ -6,7 +6,7 @@ Developer-side helpers. Nothing here is installed on the router.
 
 Converts the Windows presets of
 [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube)
-into the preset format the LuCI "NFQWS options" tab reads.
+into the preset format the LuCI "Strategies" tab reads.
 
 ```sh
 git clone https://github.com/Flowseal/zapret-discord-youtube ../zapret-discord-youtube
