@@ -31,3 +31,15 @@ textarea.zp-readonly
 {
     opacity: 0.85;
 }
+
+/* validation bubbles
+   The themes paint .cbi-tooltip.error red and set "color: var(--on-error-color)".
+   Where a theme leaves that variable undefined the declaration is invalid and gets
+   dropped, so the text keeps the colour inherited from .cbi-input-invalid - which is
+   also red. Same fallback, but one that cannot end up undefined. */
+.cbi-tooltip.error,
+.cbi-tooltip.error *
+{
+    color: var(--on-error-color, #ffffff) !important;
+    text-shadow: none !important;
+}
