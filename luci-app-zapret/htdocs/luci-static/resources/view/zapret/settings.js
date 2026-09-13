@@ -13,51 +13,6 @@ document.head.appendChild(E('link', {
     href: L.resource('view/zapret/styles.css') + (L.env.resource_version ? '?v=' + L.env.resource_version : '')
 }));
 
-/*
- * A set of buttons with one of them pressed; the value is the key of the pressed one.
- * choices: [ { key, label, hint } ]
- */
-const UIChips = ui.AbstractElement.extend({
-    __init__: function(value, choices, options) {
-        this.value = value;
-        this.choices = choices;
-        this.options = Object.assign({ }, options);
-    },
-
-    render: function() {
-        return this.bind(E('div', { 'id': this.options.id, 'class': 'zp-chips' }, this.choices.map(choice =>
-            E('button', {
-                'type': 'button',
-                'class': 'zp-chip',
-                'title': choice.hint || null,
-                'data-value': choice.key,
-                'aria-pressed': (choice.key === this.value) ? 'true' : 'false',
-                'click': () => this.setValue(choice.key),
-            }, [ choice.label ])
-        )));
-    },
-
-    bind: function(frame) {
-        this.node = frame;
-        /* a chip sets the value first, the click then bubbles up here */
-        this.setUpdateEvents(frame, 'click');
-        this.setChangeEvents(frame, 'click');
-        dom.bindClassInstance(frame, this);
-        return frame;
-    },
-
-    getValue: function() {
-        return this.value;
-    },
-
-    setValue: function(value) {
-        this.value = value;
-        this.node.querySelectorAll('.zp-chip').forEach(btn => {
-            btn.setAttribute('aria-pressed', (btn.getAttribute('data-value') === value) ? 'true' : 'false');
-        });
-    },
-});
-
 /* the game filter as a checkbox per protocol; the value is off, all, tcp or udp, as service.bat keeps it */
 const UIGameFilter = ui.AbstractElement.extend({
     __init__: function(value, options) {
@@ -103,10 +58,11 @@ const UIGameFilter = ui.AbstractElement.extend({
 });
 
 /*
- * The strategy drop-down: the built-in strategies, then the own ones in a group of their own.
- * groups: [ { title, choices: [ { key, label } ] } ]
+ * A drop-down whose options may come in groups. A value that is not among them, such as a
+ * strategy or payload whose file is gone, stays picked rather than turning into another one.
+ * groups: [ { title, choices: [ { key, label } ] } ]; options: id, label(value) for such a value
  */
-const UIStrategySelect = ui.AbstractElement.extend({
+const UISelect = ui.AbstractElement.extend({
     __init__: function(value, groups, options) {
         this.value = value;
         this.groups = groups;
@@ -114,7 +70,7 @@ const UIStrategySelect = ui.AbstractElement.extend({
     },
 
     render: function() {
-        let select = E('select', { 'id': this.options.id, 'class': 'cbi-input-select' });
+        let select = E('select', { 'id': this.options.id, 'class': 'cbi-input-select zp-select' });
         let known = false;
         let option = (choice) => {
             known = known || (choice.key === this.value);
@@ -137,8 +93,8 @@ const UIStrategySelect = ui.AbstractElement.extend({
             select.insertBefore(E('option', { 'value': '', 'selected': 'selected', 'disabled': 'disabled' },
                                   [ _('-- Please choose --') ]), select.firstChild);
         } else if (!known) {
-            /* a strategy whose file is gone stays picked rather than turning into another one */
-            select.appendChild(E('option', { 'value': this.value, 'selected': 'selected' }, [ this.value ]));
+            let label = this.options.label ? this.options.label(this.value) : this.value;
+            select.appendChild(E('option', { 'value': this.value, 'selected': 'selected' }, [ label ]));
         }
         return this.bind(select);
     },
@@ -162,32 +118,20 @@ const UIStrategySelect = ui.AbstractElement.extend({
 });
 
 /*
- * Form options over the widgets above; choices() and groups() are called on every render. The
- * parse of the form leaves them out of uci: the save callback stores them together with the
- * strategy they render (presets.stage), so a refused save leaves nothing half written behind.
+ * Form options over the widgets above; groups() is called on every render. The parse of the
+ * form leaves them out of uci: the save callback stores them together with the strategy they
+ * render (presets.stage), so a refused save leaves nothing half written behind.
  */
-const CBIChips = form.Value.extend({
-    __name__: 'CBI.ZapretChips',
+const CBISelect = form.Value.extend({
+    __name__: 'CBI.ZapretSelect',
 
     write: function() { },
     remove: function() { },
 
     renderWidget: function(section_id, option_index, cfgvalue) {
-        return new UIChips((cfgvalue != null) ? cfgvalue : this.default, this.choices(section_id), {
+        return new UISelect((cfgvalue != null) ? cfgvalue : this.default, this.groups(section_id), {
             id: this.cbid(section_id),
-        }).render();
-    },
-});
-
-const CBIStrategy = form.Value.extend({
-    __name__: 'CBI.ZapretStrategy',
-
-    write: function() { },
-    remove: function() { },
-
-    renderWidget: function(section_id, option_index, cfgvalue) {
-        return new UIStrategySelect(cfgvalue, this.groups(section_id), {
-            id: this.cbid(section_id),
+            label: this.label,
         }).render();
     },
 });
@@ -205,13 +149,18 @@ const CBIGameFilter = form.Value.extend({
     },
 });
 
-/* the fake payloads come from a drop-down, stored the same way */
-const CBIFakeList = form.ListValue.extend({
-    __name__: 'CBI.ZapretFakeList',
+/* the payloads are named after what they imitate: quic_initial_4pda_to.bin is a QUIC Initial of 4pda.to */
+const FAKE_KINDS = [
+    [ 'quic_initial_',    'QUIC Initial' ],
+    [ 'tls_clienthello_', 'TLS ClientHello' ],
+];
 
-    write: function() { },
-    remove: function() { },
-});
+function fakeLabel(file)
+{
+    let base = file.replace(/\.bin$/, '');
+    let kind = FAKE_KINDS.filter(([ prefix ]) => base.startsWith(prefix))[0];
+    return kind ? base.slice(kind[0].length).replace(/_/g, '.') : base;
+}
 
 return view.extend({
     svc_info: null,
@@ -578,7 +527,7 @@ return view.extend({
         s.anonymous = true;
         s.addremove = false;
 
-        o = s.option(CBIStrategy, 'NFQWS_PRESET', _('Strategy'));
+        o = s.option(CBISelect, 'NFQWS_PRESET', _('Strategy'));
         o.groups = () => {
             let choice = (p) => ({ key: p.id, label: p.meta.NAME || p.id });
             return [
@@ -589,19 +538,22 @@ return view.extend({
         o.renderWidget = function(section_id, option_index, cfgvalue) {
             return E('div', { }, [
                 E('div', { 'class': 'zp-strategy' }, [
-                    CBIStrategy.prototype.renderWidget.call(this, section_id, option_index, cfgvalue),
-                    E('button', {
-                        'type': 'button',
-                        'class': 'btn cbi-button-add',
-                        'click': () => view.openStrategyEditor(null),
-                    }, [ _('Create strategy') ]),
-                    E('button', {
-                        'id': 'zp_edit',
-                        'type': 'button',
-                        'class': 'btn cbi-button-edit',
-                        'disabled': 'disabled',
-                        'click': () => view.openStrategyEditor(view.findPreset(view.formValue('NFQWS_PRESET'))),
-                    }, [ _('Edit') ]),
+                    CBISelect.prototype.renderWidget.call(this, section_id, option_index, cfgvalue),
+                    /* one piece, so that Edit never wraps onto a line of its own */
+                    E('span', { 'class': 'zp-buttons' }, [
+                        E('button', {
+                            'type': 'button',
+                            'class': 'btn cbi-button-add',
+                            'click': () => view.openStrategyEditor(null),
+                        }, [ _('Create strategy') ]),
+                        E('button', {
+                            'id': 'zp_edit',
+                            'type': 'button',
+                            'class': 'btn cbi-button-edit',
+                            'disabled': 'disabled',
+                            'click': () => view.openStrategyEditor(view.findPreset(view.formValue('NFQWS_PRESET'))),
+                        }, [ _('Edit') ]),
+                    ]),
                 ]),
                 E('div', { 'id': 'zp_notice', 'class': 'zp-notice', 'hidden': 'hidden' }),
             ]);
@@ -610,26 +562,27 @@ return view.extend({
         o = s.option(CBIGameFilter, 'GAME_FILTER', _('Game Filter'));
         o.default = presets.defaults.game;
 
-        o = s.option(CBIChips, 'IPSET_MODE', _('IPSet Filter'));
+        o = s.option(CBISelect, 'IPSET_MODE', _('IPSet Filter'));
         o.default = presets.defaults.ipset;
-        o.choices = () => [
-            { key: 'none',   label: 'none',   hint: _('The sections filtered by ipset-all match no address') },
-            { key: 'any',    label: 'any',    hint: _('The sections filtered by ipset-all apply to every address') },
-            { key: 'loaded', label: 'loaded', hint: _('The addresses from %s').format(presets.resolveLists().IPSET.file) },
-        ];
+        o.groups = () => [ { choices: [ 'none', 'any', 'loaded' ].map(key => ({ key: key, label: key })) } ];
 
-        [ [ 'FAKE_DISCORD_UDP', _('Discord/STUN UDP fake'), presets.defaults.fakeDsc ],
-          [ 'FAKE_GAME_UDP',    _('Game UDP fake'),         presets.defaults.fakeGam ] ].forEach(([ name, title, dflt ]) => {
-            o = s.option(CBIFakeList, name, title);
-            o.default = dflt;
-            let files = this.catalog.fakes.slice();
-            /* a payload that is gone stays shown rather than turning into the first one */
-            let cur = uci.get(tools.appName, 'config', name);
-            if (cur && files.indexOf(cur) < 0) {
-                files.push(cur);
-            }
-            files.forEach(file => o.value(file, file.replace(/\.bin$/, '')));
-        });
+        /* shown by the domain they imitate, grouped by kind: 4pda.to is there as QUIC and as TLS */
+        let fakes = () => {
+            let kind = (file) => FAKE_KINDS.findIndex(([ prefix ]) => file.startsWith(prefix));
+            return FAKE_KINDS.map(([ prefix, title ], i) => ({ title: title, files: this.catalog.fakes.filter(f => kind(f) == i) }))
+                .concat([ { title: _('Other'), files: this.catalog.fakes.filter(f => kind(f) < 0) } ])
+                .map(group => ({ title: group.title, choices: group.files.map(f => ({ key: f, label: fakeLabel(f) })) }));
+        };
+
+        o = s.option(CBISelect, 'FAKE_DISCORD_UDP', _('Discord/STUN UDP fake'));
+        o.default = presets.defaults.fakeDsc;
+        o.groups = fakes;
+        o.label = fakeLabel;
+
+        o = s.option(CBISelect, 'FAKE_GAME_UDP', _('Game UDP fake'));
+        o.default = presets.defaults.fakeGam;
+        o.groups = fakes;
+        o.label = fakeLabel;
 
         o = s.option(form.Button, '_settings_btn', _('Advanced settings'));
         o.inputtitle = _('Edit');
