@@ -20,7 +20,9 @@ fi
 REPO=$(cd "$(dirname "$0")/.." 2>/dev/null || exit 1; pwd)
 cd "$REPO"
 
-for f in luci-app-zapret/htdocs/luci-static/resources/view/zapret/presets.js zapret/presets/general.conf; do
+for f in luci-app-zapret/htdocs/luci-static/resources/view/zapret/presets.js \
+         luci-app-zapret/htdocs/luci-static/resources/view/zapret/lists.js \
+         zapret/update-lists.sh zapret/presets/general.conf; do
 	[ -f "$f" ] || { echo "error: $f not found - run from a full checkout" >&2; exit 1; }
 done
 
@@ -41,6 +43,7 @@ cp luci-app-zapret/root/usr/share/rpcd/acl.d/*.json               "$STAGE/usr/sh
 cp luci-app-zapret/root/usr/share/luci/menu.d/*.json              "$STAGE/usr/share/luci/menu.d/"
 
 cp zapret/comfunc.sh zapret/def-cfg.sh zapret/uci-def-cfg.sh      "$STAGE/opt/zapret/"
+cp zapret/update-lists.sh zapret/restore-def-cfg.sh               "$STAGE/opt/zapret/"
 cp zapret/presets/*.conf                                          "$STAGE/opt/zapret/presets/"
 cp zapret/files/fake/flowseal/*.bin                               "$STAGE/opt/zapret/files/fake/flowseal/"
 cp zapret/ipset/zapret-hosts-flowseal.txt                         "$STAGE/opt/zapret/ipset/"
@@ -60,6 +63,8 @@ set -e
 mkdir -p /opt/zapret/presets/user
 # pull the new uci options (GAME_FILTER, IPSET_MODE, FAKE_*) into /etc/config/zapret
 [ -x /opt/zapret/renew-cfg.sh ] && /opt/zapret/renew-cfg.sh
+# keep the host-list cron task in sync with the uci config
+[ -x /opt/zapret/update-lists.sh ] && /opt/zapret/update-lists.sh -S >/dev/null 2>&1
 # LuCI caches its module index and compiled views aggressively
 rm -f /tmp/luci-index*
 rm -rf /tmp/luci-modulecache/
@@ -68,8 +73,10 @@ rm -rf /tmp/luci-modulecache/
 [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd reload
 echo "presets on router: $(ls -1 /opt/zapret/presets/*.conf 2>/dev/null | wc -l)"
 echo "payloads on router: $(ls -1 /opt/zapret/files/fake/flowseal/*.bin 2>/dev/null | wc -l)"
+echo "update-lists.sh:    $([ -x /opt/zapret/update-lists.sh ] && echo installed || echo MISSING)"
 REMOTE
 
 echo
 echo "done. open LuCI -> Services -> Zapret -> Settings -> NFQWS options"
+echo "                        and Services -> Zapret -> Host lists"
 echo "and HARD-refresh the browser (Ctrl+Shift+R) - LuCI caches the JS."
