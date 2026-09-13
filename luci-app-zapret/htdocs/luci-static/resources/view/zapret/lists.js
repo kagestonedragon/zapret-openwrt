@@ -66,28 +66,51 @@ return view.extend({
     /* one-click import of the ready-made sources from tools.listCatalog */
     openCatalogDialog: function(map)
     {
+        let byUrl = { }, byFile = { }, bySid = { };
+        tools.listCatalog.forEach(item => {
+            bySid[item.sid]   = item;
+            byUrl[item.url]   = item;
+            byFile[item.file] = item;
+        });
+
         /* rows added before catalog entries got fixed section names are anonymous, so they
            are matched back by url or file and folded into the one canonical section */
-        let named = { };
-        let legacy = { };
+        let named = { }, legacy = { }, own = [ ], used = { };
         uci.sections(tools.appName, tools.userListSecType, (sec) => {
             let sname = sec['.name'];
             if (!sname) {
                 return;
             }
-            named[sname] = true;
-            tools.listCatalog.forEach(item => {
-                if (sname === item.sid) {
-                    return;
-                }
-                if (sec.url === item.url || sec.file === item.file) {
-                    legacy[item.sid] = (legacy[item.sid] || []).concat(sname);
-                }
-            });
+            named[sname] = sec;
+            if (sec.url)  used['u:' + sec.url]  = true;
+            if (sec.file) used['f:' + sec.file] = true;
+
+            if (bySid[sname]) {
+                return;                       /* the canonical row of a catalog entry */
+            }
+            let hit = byUrl[sec.url] || byFile[sec.file];
+            if (hit) {
+                legacy[hit.sid] = (legacy[hit.sid] || []).concat(sname);
+                return;                       /* a leftover duplicate of a catalog entry */
+            }
+            own.push(sec);                    /* a list of the user's own */
         });
 
         let boxes = [ ];
         let stale = 0;
+
+        let renderRow = function(box, title, note) {
+            return E('div', { 'style': 'margin-bottom:8px;' },
+                E('label', {}, [
+                    /* array children become text nodes; a bare string would be set as
+                       innerHTML, and the name of an own list comes from the config */
+                    box, ' ', E('b', {}, [ title ]),
+                    E('br'),
+                    E('small', { 'style': 'opacity:0.7; margin-left:22px;' }, [ note ]),
+                ])
+            );
+        };
+
         let rows = tools.listCatalog.map(item => {
             let dupes = legacy[item.sid] || [ ];
             let done = named[item.sid] && dupes.length === 0;
@@ -105,20 +128,18 @@ return view.extend({
             box._dupes = dupes;
             boxes.push(box);
 
-            let note;
-            if (dupes.length) {
-                note = _('%d duplicate row(s) will be replaced by one').format(dupes.length);
-            } else {
-                note = item.file + ' \u2190 ' + item.url;
-            }
+            return renderRow(box, item.name,
+                dupes.length ? _('%d duplicate row(s) will be replaced by one').format(dupes.length)
+                             : item.file + ' ← ' + item.url);
+        });
 
-            return E('div', { 'style': 'margin-bottom:8px;' },
-                E('label', {}, [
-                    box, ' ', E('b', {}, item.name),
-                    E('br'),
-                    E('small', { 'style': 'opacity:0.7; margin-left:22px;' }, note),
-                ])
-            );
+        /* lists of the user's own sit next to the known ones, ticked and locked like them */
+        own.forEach(sec => {
+            let box = E('input', { 'type': 'checkbox' });
+            box.checked = true;
+            box.disabled = true;
+            rows.push(renderRow(box, sec.name || sec['.name'],
+                (sec.file || '') + (sec.url ? ' ← ' + sec.url : ' — ' + _('local list'))));
         });
 
         let own_name = E('input', {
@@ -136,6 +157,85 @@ return view.extend({
         let own_err = E('p', { 'style': 'color:#e55; margin:6px 0 0 0;' });
         own_err.hidden = true;
 
+        let showErr = function(msg) {
+            own_err.textContent = msg;
+            own_err.hidden = false;
+        };
+
+        let btn_own = E('button', { 'class': btn_style_action }, _('Add own list'));
+        btn_own.onclick = ui.createHandlerFn(this, async () => {
+            let oname = own_name.value.trim();
+            let ofile = own_file.value.trim();
+            let ourl  = own_url.value.trim();
+            own_err.hidden = true;
+
+            if (!oname.length) {
+                return showErr(_('Enter a name for your list'));
+            }
+            if (!/^https?:\/\/\S+$/.test(ourl)) {
+                return showErr(_('Enter a http:// or https:// URL'));
+            }
+            if (used['u:' + ourl]) {
+                return showErr(_('This repository is already in the list'));
+            }
+
+            let file;
+            if (ofile.length) {
+                /* given explicitly: never silently renamed, a clash is an error */
+                if (!fname_re.test(ofile)) {
+                    return showErr(_('Only letters, digits, dot, dash and underscore are allowed, extension must be .txt'));
+                }
+                if (ofile == 'zapret-hosts-auto.txt') {
+                    return showErr(_('This file is managed by nfqws and cannot be used here'));
+                }
+                if (used['f:' + ofile]) {
+                    return showErr(_('This file name is already used by another list'));
+                }
+                file = ofile;
+            } else {
+                let slug = oname.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                if (!slug.length) {
+                    /* a name written in a non-latin script leaves nothing to build a file
+                       name from, so fall back to the last path segment of the url */
+                    slug = ourl.split('?')[0].split('/').pop().toLowerCase()
+                               .replace(/\.[a-z0-9]+$/, '')
+                               .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                }
+                if (!slug.length) {
+                    slug = 'list';
+                }
+                file = slug + '.txt';
+                for (let n = 2; used['f:' + file]; n++) {
+                    file = slug + '-' + n + '.txt';
+                }
+                if (!fname_re.test(file)) {
+                    return showErr(_('The name does not translate into a usable file name'));
+                }
+            }
+
+            let base = file.replace(/\.txt$/, '').replace(/[^A-Za-z0-9]+/g, '_');
+            let sid = 'usr_' + base;
+            for (let n = 2; uci.get(tools.appName, sid) != null; n++) {
+                sid = 'usr_' + base + '_' + n;
+            }
+
+            uci.add(tools.appName, tools.userListSecType, sid);
+            uci.set(tools.appName, sid, 'name',       oname);
+            uci.set(tools.appName, sid, 'file',       file);
+            uci.set(tools.appName, sid, 'url',        ourl);
+            uci.set(tools.appName, sid, 'type',       'hostlist');
+            uci.set(tools.appName, sid, 'autoupdate', '1');
+
+            try {
+                await map.save();
+            } catch(e) {
+                uci.remove(tools.appName, sid);
+                return showErr(_('Unable to save the contents') + ': ' + e.message);
+            }
+            /* reopen so the new list shows up among the known ones */
+            return this.openCatalogDialog(map);
+        });
+
         let own_form = E('div', { 'class': 'cbi-section' }, [
             E('h5', {}, _('Own list')),
             E('div', { 'class': 'cbi-value' }, [
@@ -150,78 +250,18 @@ return view.extend({
                 E('label', { 'class': 'cbi-value-title' }, _('Repository')),
                 E('div', { 'class': 'cbi-value-field' }, own_url),
             ]),
+            E('div', { 'class': 'cbi-value' }, [
+                E('label', { 'class': 'cbi-value-title' }, ' '),
+                E('div', { 'class': 'cbi-value-field' }, btn_own),
+            ]),
             E('div', { 'class': 'cbi-value-description' },
                 _('Leave the file name empty to derive it from the list name. Type defaults to hosts and can be changed in the row editor.')),
             own_err,
         ]);
 
-        let showErr = function(msg) {
-            own_err.textContent = msg;
-            own_err.hidden = false;
-        };
-
         let btn_add = E('button', { 'class': btn_style_action }, _('Add selected'));
         btn_add.onclick = ui.createHandlerFn(this, async () => {
-            let added = 0;
-            let removed = 0;
-            let own = null;
-
-            let oname = own_name.value.trim();
-            let ourl = own_url.value.trim();
-            own_err.hidden = true;
-            if (oname.length || ourl.length) {
-                if (!oname.length) {
-                    return showErr(_('Enter a name for your list'));
-                }
-                if (!/^https?:\/\/\S+$/.test(ourl)) {
-                    return showErr(_('Enter a http:// or https:// URL'));
-                }
-                if (used['u:' + ourl]) {
-                    return showErr(_('This repository is already in the list'));
-                }
-                let ofile = own_file.value.trim();
-                let file, sid;
-
-                if (ofile.length) {
-                    /* given explicitly: never silently renamed, a clash is an error */
-                    if (!fname_re.test(ofile)) {
-                        return showErr(_('Only letters, digits, dot, dash and underscore are allowed, extension must be .txt'));
-                    }
-                    if (ofile == 'zapret-hosts-auto.txt') {
-                        return showErr(_('This file is managed by nfqws and cannot be used here'));
-                    }
-                    if (used['f:' + ofile]) {
-                        return showErr(_('This file name is already used by another list'));
-                    }
-                    file = ofile;
-                } else {
-                    let slug = oname.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                    if (!slug.length) {
-                        /* a name written in a non-latin script leaves nothing to build a file
-                           name from, so fall back to the last path segment of the url */
-                        slug = ourl.split('?')[0].split('/').pop().toLowerCase()
-                                   .replace(/\.[a-z0-9]+$/, '')
-                                   .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                    }
-                    if (!slug.length) {
-                        slug = 'list';
-                    }
-                    file = slug + '.txt';
-                    for (let n = 2; used['f:' + file]; n++) {
-                        file = slug + '-' + n + '.txt';
-                    }
-                    if (!fname_re.test(file)) {
-                        return showErr(_('The name does not translate into a usable file name'));
-                    }
-                }
-
-                let base = file.replace(/\.txt$/, '').replace(/[^A-Za-z0-9]+/g, '_');
-                sid = 'usr_' + base;
-                for (let n = 2; uci.get(tools.appName, sid) != null; n++) {
-                    sid = 'usr_' + base + '_' + n;
-                }
-                own = { sid: sid, name: oname, file: file, url: ourl, type: 'hostlist' };
-            }
+            let added = 0, removed = 0;
             boxes.forEach(box => {
                 if (box.disabled || !box.checked) {
                     return;
@@ -241,15 +281,6 @@ return view.extend({
                 uci.set(tools.appName, item.sid, 'type',       item.type);
                 uci.set(tools.appName, item.sid, 'autoupdate', '1');
             });
-            if (own) {
-                uci.add(tools.appName, tools.userListSecType, own.sid);
-                uci.set(tools.appName, own.sid, 'name',       own.name);
-                uci.set(tools.appName, own.sid, 'file',       own.file);
-                uci.set(tools.appName, own.sid, 'url',        own.url);
-                uci.set(tools.appName, own.sid, 'type',       own.type);
-                uci.set(tools.appName, own.sid, 'autoupdate', '1');
-                added += 1;
-            }
             ui.hideModal();
             if (added == 0 && removed == 0) {
                 return;
