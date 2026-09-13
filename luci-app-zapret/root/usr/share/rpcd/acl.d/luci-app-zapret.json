@@ -11,7 +11,6 @@
 				"/opt/zapret/presets/*": [ "read" ],
 				"/opt/zapret/files/fake": [ "read" ],
 				"/opt/zapret/files/fake/flowseal": [ "read" ],
-				"/opt/zapret/init.d/openwrt/custom.d/*": [ "read" ],
 				"/etc/crontabs/root": [ "read" ],
 				"/tmp/zapret*": [ "read" ],
 				"/etc/init.d/zapret*": [ "exec" ],
@@ -36,7 +35,6 @@
 				"/opt/zapret/config": [ "write" ],
 				"/opt/zapret/ipset/*": [ "write" ],
 				"/opt/zapret/presets/*": [ "write" ],
-				"/opt/zapret/init.d/openwrt/custom.d/*": [ "write" ],
 				"/etc/crontabs/root": [ "write" ]
 			},
 			"uci": [ "zapret" ]
