@@ -121,10 +121,78 @@ return view.extend({
             );
         });
 
+        let own_name = E('input', {
+            'type': 'text', 'class': 'cbi-input-text',
+            'style': 'width:100%', 'placeholder': _('My list'),
+        });
+        let own_url = E('input', {
+            'type': 'text', 'class': 'cbi-input-text',
+            'style': 'width:100%', 'placeholder': 'https://example.org/list.txt',
+        });
+        let own_err = E('p', { 'style': 'color:#e55; margin:6px 0 0 0;' });
+        own_err.hidden = true;
+
+        let own_form = E('div', { 'class': 'cbi-section' }, [
+            E('h5', {}, _('Own list')),
+            E('div', { 'class': 'cbi-value' }, [
+                E('label', { 'class': 'cbi-value-title' }, _('Name')),
+                E('div', { 'class': 'cbi-value-field' }, own_name),
+            ]),
+            E('div', { 'class': 'cbi-value' }, [
+                E('label', { 'class': 'cbi-value-title' }, _('Repository')),
+                E('div', { 'class': 'cbi-value-field' }, own_url),
+            ]),
+            E('div', { 'class': 'cbi-value-description' },
+                _('The file name is derived from the name. Type defaults to hosts and can be changed in the row editor.')),
+            own_err,
+        ]);
+
+        let showErr = function(msg) {
+            own_err.textContent = msg;
+            own_err.hidden = false;
+        };
+
         let btn_add = E('button', { 'class': btn_style_action }, _('Add selected'));
         btn_add.onclick = ui.createHandlerFn(this, async () => {
             let added = 0;
             let removed = 0;
+            let own = null;
+
+            let oname = own_name.value.trim();
+            let ourl = own_url.value.trim();
+            own_err.hidden = true;
+            if (oname.length || ourl.length) {
+                if (!oname.length) {
+                    return showErr(_('Enter a name for your list'));
+                }
+                if (!/^https?:\/\/\S+$/.test(ourl)) {
+                    return showErr(_('Enter a http:// or https:// URL'));
+                }
+                if (used['u:' + ourl]) {
+                    return showErr(_('This repository is already in the list'));
+                }
+                let slug = oname.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                if (!slug.length) {
+                    /* a name written in a non-latin script leaves nothing to build a file
+                       name from, so fall back to the last path segment of the url */
+                    slug = ourl.split('?')[0].split('/').pop().toLowerCase()
+                               .replace(/\.[a-z0-9]+$/, '')
+                               .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                }
+                if (!slug.length) {
+                    slug = 'list';
+                }
+                let file = slug + '.txt';
+                let sid = 'usr_' + slug.replace(/-/g, '_');
+                for (let n = 2; uci.get(tools.appName, sid) != null || used['f:' + file]; n++) {
+                    file = slug + '-' + n + '.txt';
+                    sid = 'usr_' + slug.replace(/-/g, '_') + '_' + n;
+                }
+                if (!fname_re.test(file)) {
+                    return showErr(_('The name does not translate into a usable file name'));
+                }
+                own = { sid: sid, name: oname, file: file, url: ourl, type: 'hostlist' };
+            }
             boxes.forEach(box => {
                 if (box.disabled || !box.checked) {
                     return;
@@ -144,6 +212,15 @@ return view.extend({
                 uci.set(tools.appName, item.sid, 'type',       item.type);
                 uci.set(tools.appName, item.sid, 'autoupdate', '1');
             });
+            if (own) {
+                uci.add(tools.appName, tools.userListSecType, own.sid);
+                uci.set(tools.appName, own.sid, 'name',       own.name);
+                uci.set(tools.appName, own.sid, 'file',       own.file);
+                uci.set(tools.appName, own.sid, 'url',        own.url);
+                uci.set(tools.appName, own.sid, 'type',       own.type);
+                uci.set(tools.appName, own.sid, 'autoupdate', '1');
+                added += 1;
+            }
             ui.hideModal();
             if (added == 0 && removed == 0) {
                 return;
@@ -172,6 +249,8 @@ return view.extend({
                         ? _('%d duplicate row(s) left over from an older version were found. Confirm to fold them into one row per list.').format(stale)
                         : _('Lists are downloaded into separate files, package files are never overwritten.')),
                 E('div', {}, rows),
+                E('hr'),
+                own_form,
             ]),
             E('div', { 'style': 'display:flex; justify-content:space-between; margin-top:1px;' }, [
                 E('div', { 'class': 'left' }, [ btn_add ]),
