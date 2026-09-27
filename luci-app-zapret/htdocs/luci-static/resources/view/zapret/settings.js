@@ -6,6 +6,7 @@
 'require view';
 'require view.zapret.tools as tools';
 'require view.zapret.presets as presets';
+'require view.zapret.customd as customd';
 
 document.head.appendChild(E('link', {
     rel: 'stylesheet',
@@ -126,10 +127,41 @@ function fakeLabel(file)
     return kind ? base.slice(kind[0].length).replace(/_/g, '.') : base;
 }
 
+/* the editor dialogs: a labelled field */
+function editorRow(label, field)
+{
+    return E('div', { 'class': 'cbi-value' }, [
+        E('label', { 'class': 'cbi-value-title' }, [ label ]),
+        E('div', { 'class': 'cbi-value-field' }, [ field ]),
+    ]);
+}
+
+/* the editor dialogs: Delete on the left when remove is given, Dismiss and Save on the right */
+function editorButtons(ctx, remove, save)
+{
+    return E('div', { 'class': 'zp-editor-buttons' }, [
+        E('div', { }, remove ? [
+            E('button', {
+                'class': 'btn cbi-button-negative',
+                'click': ui.createHandlerFn(ctx, remove),
+            }, [ _('Delete') ]),
+        ] : [ ]),
+        E('div', { }, [
+            E('button', { 'class': 'btn', 'click': ui.hideModal }, [ _('Dismiss') ]),
+            ' ',
+            E('button', {
+                'class': 'btn cbi-button-positive important',
+                'click': ui.createHandlerFn(ctx, save),
+            }, [ _('Save') ]),
+        ]),
+    ]);
+}
+
 return view.extend({
     svc_info: null,
     map: null,
     catalog: null,      /* presets, fake payloads, lists dir: see presets.loadCatalog() */
+    scripts: null,      /* the custom.d scripts: see customd.list() */
 
     load: function()
     {
@@ -140,8 +172,10 @@ return view.extend({
                 return data;
             }),
             L.resolveDefault(presets.loadCatalog(), null),
-        ]).then(([ data, catalog ]) => {
+            L.resolveDefault(customd.list(), null),
+        ]).then(([ data, catalog, scripts ]) => {
             this.catalog = catalog || { presets: [ ], fakes: [ ], files: { } };
+            this.scripts = scripts || [ ];
             return data;
         });
     },
@@ -293,38 +327,137 @@ return view.extend({
             return this.reloadStrategies(null, editing.id);
         };
 
-        let row = (label, field) => E('div', { 'class': 'cbi-value' }, [
-            E('label', { 'class': 'cbi-value-title' }, [ label ]),
-            E('div', { 'class': 'cbi-value-field' }, [ field ]),
-        ]);
-
         ui.showModal(editing ? _('Edit strategy') : _('Create strategy'), [
             E('div', { 'class': 'cbi-section' }, [
                 editing ? E('div') : E('div', { 'class': 'cbi-section-descr' }, [
                     _('Based on %s').format(base.meta.NAME || base.id),
                 ]),
-                row(_('Name'), name),
-                row(_('TCP ports'), ptcp),
-                row(_('UDP ports'), pudp),
+                editorRow(_('Name'), name),
+                editorRow(_('TCP ports'), ptcp),
+                editorRow(_('UDP ports'), pudp),
                 body,
                 error,
             ]),
-            E('div', { 'class': 'zp-editor-buttons' }, [
-                E('div', { }, editing ? [
-                    E('button', {
-                        'class': 'btn cbi-button-negative',
-                        'click': ui.createHandlerFn(this, remove),
-                    }, [ _('Delete') ]),
-                ] : [ ]),
-                E('div', { }, [
-                    E('button', { 'class': 'btn', 'click': ui.hideModal }, [ _('Dismiss') ]),
-                    ' ',
-                    E('button', {
-                        'class': 'btn cbi-button-positive important',
-                        'click': ui.createHandlerFn(this, save),
-                    }, [ _('Save') ]),
-                ]),
+            editorButtons(this, editing ? remove : null, save),
+        ], 'cbi-modal');
+    },
+
+    /* the custom.d scripts in the order they run, each with its Edit, then Add script */
+    renderScripts: function()
+    {
+        let cells = [ ];
+        this.scripts.forEach(item => {
+            cells.push(
+                E('span', { 'class': 'zp-script-name' }, [ item.name ]),
+                E('span', { 'class': 'zp-script-title', 'title': item.title }, [ item.title ]),
+                E('button', {
+                    'type': 'button',
+                    'class': 'btn cbi-button-edit',
+                    'click': () => this.openScriptEditor(item),
+                }, [ _('Edit') ]));
+        });
+        return [
+            cells.length ? E('div', { 'class': 'zp-scripts' }, cells) : '',
+            E('button', {
+                'type': 'button',
+                'class': 'btn cbi-button-add',
+                'click': () => this.openScriptEditor(null),
+            }, [ _('Add script') ]),
+        ];
+    },
+
+    /* re-read the scripts after the editor changed them; the rest of the form stays as it is */
+    reloadScripts: async function()
+    {
+        this.scripts = await customd.list();
+        let node = this.map.findElement('id', 'zp_scripts');
+        if (node) {
+            dom.content(node, this.renderScripts());
+        }
+    },
+
+    /* a custom.d script: a new one, or one of the list to change, rename or delete */
+    openScriptEditor: function(editing)
+    {
+        let name = E('input', {
+            'type': 'text',
+            'class': 'cbi-input-text',
+            'value': editing ? editing.name : '',
+            'placeholder': '50-my-script.sh',
+        });
+        let body = E('textarea', {
+            'class': 'cbi-input-textarea',
+            'style': 'width:100% !important',
+            'rows': 18,
+            'wrap': 'off',
+            'spellcheck': 'false',
+        });
+        body.value = editing ? editing.text : '';
+
+        let error = E('p', { 'class': 'zp-error' });
+        error.hidden = true;
+        let fail = (msg) => {
+            error.textContent = msg;
+            error.hidden = false;
+        };
+
+        let save = async () => {
+            let file = name.value.trim();
+            let text = body.value.replace(/\r/g, '').replace(/\s+$/, '');
+            if (!editing || file != editing.name) {
+                let err = customd.validateName(file);
+                if (err) {
+                    return fail(err);
+                }
+                if (this.scripts.some(s => s.name == file)) {
+                    return fail(_('A script named "%s" already exists').format(file));
+                }
+            }
+            if (!text) {
+                return fail(_('The script is empty'));
+            }
+            try {
+                await customd.save(file, text + '\n');
+                if (editing && file != editing.name) {
+                    await customd.remove(editing.name);
+                }
+            } catch (e) {
+                return fail(e.message);
+            }
+            ui.hideModal();
+            return this.reloadScripts();
+        };
+
+        let remove = async () => {
+            if (!confirm(_('Delete script "%s"?').format(editing.name))) {
+                return;
+            }
+            try {
+                await customd.remove(editing.name);
+            } catch (e) {
+                return fail(e.message);
+            }
+            ui.hideModal();
+            return this.reloadScripts();
+        };
+
+        let examples = [ ];
+        customd.customdExamples.forEach((url, i) => {
+            examples.push(i ? ', ' : ' ', E('a', { 'href': url, 'target': '_blank' }, [ url.replace(/.*\//, '') ]));
+        });
+
+        ui.showModal(editing ? _('Edit script') : _('Add script'), [
+            E('div', { 'class': 'cbi-section' }, [
+                E('div', { 'class': 'cbi-section-descr' }, [
+                    _('Scripts run in the order of their names: 10-first.sh before 50-second.sh.'),
+                    E('br'),
+                    _('Examples:'),
+                ].concat(examples)),
+                editorRow(_('Name'), name),
+                body,
+                error,
             ]),
+            editorButtons(this, editing ? remove : null, save),
         ], 'cbi-modal');
     },
 
@@ -557,6 +690,31 @@ return view.extend({
             (tools.appName == 'zapret2') ? 'NFQWS2' : 'NFQWS',
             (tools.appName == 'zapret2') ? 'NFQWS2_OPT' : 'NFQWS_OPT');
         o.onclick = L.bind(this.openSettingsDialog, this);
+
+        /* ---------------------------- custom.d ----------------------------- */
+
+        s = m.section(form.NamedSection, 'config');
+        s.anonymous = true;
+        s.addremove = false;
+        s.title = 'custom.d';
+        s.description = _('Scripts from %s that zapret runs next to the strategy, in the order of their names. Each one can start an nfqws instance of its own. Changes to them take effect when zapret restarts, as on Save &amp; Apply.')
+            .format(customd.customdDir);
+
+        o = s.option(form.Flag, 'DISABLE_CUSTOM', _('Use custom.d scripts'));
+        /* the option says the opposite; an unset one runs the scripts as well */
+        o.enabled = '0';
+        o.disabled = '1';
+        o.default = '0';
+        o.rmempty = false;
+        o.write = function(section_id, value) {
+            /* uci counts a value set again as a change */
+            if (value !== uci.get(tools.appName, section_id, this.option)) {
+                return form.Flag.prototype.write.call(this, section_id, value);
+            }
+        };
+
+        o = s.option(form.DummyValue, '_customd_scripts', _('Scripts'));
+        o.renderWidget = () => E('div', { 'id': 'zp_scripts' }, this.renderScripts());
 
         return m.render().then((node) => {
             node.classList.add('fade-in');

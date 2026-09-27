@@ -50,6 +50,27 @@ select.zp-select
     gap: 8px;
 }
 
+/* strategies tab: the custom.d scripts, a row each - name, what it is for, Edit */
+.zp-scripts
+{
+    display: grid;
+    grid-template-columns: max-content minmax(0, max-content) max-content;
+    align-items: center;
+    gap: 6px 12px;
+    margin-bottom: 8px;
+}
+.zp-script-name
+{
+    font-family: monospace;
+}
+.zp-script-title
+{
+    opacity: 0.7;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
 /* validation bubbles
    The themes paint .cbi-tooltip.error red and set "color: var(--on-error-color)".
    Where a theme leaves that variable undefined the declaration is invalid and gets

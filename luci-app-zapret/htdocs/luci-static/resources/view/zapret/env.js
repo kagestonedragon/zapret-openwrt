@@ -21,6 +21,14 @@ return baseclass.extend({
     fakeNsDir         : '/opt/zapret/files/fake/flowseal',
     custFileMax       : 4,
     custFileTemplate  : '/opt/zapret/ipset/cust%s.txt',
+    customdDir        : '/opt/zapret/init.d/openwrt/custom.d',
+    /* the ones the zapret package ships, as conffiles */
+    customdPackaged   : [ '10-script.sh', '20-script.sh', '50-script.sh', '60-script.sh', '90-script.sh' ],
+    customdExamples   : [ 'https://github.com/bol-van/zapret/blob/4e8e3a9ed9dbeb1156db68dfaa7b353051c13797/init.d/custom.d.examples.linux/50-discord',
+                          'https://github.com/bol-van/zapret/blob/b251ea839cc8f04c45090314ef69fce69f2c00f2/init.d/custom.d.examples.linux/50-discord-media',
+                          'https://github.com/bol-van/zapret/blob/b251ea839cc8f04c45090314ef69fce69f2c00f2/init.d/custom.d.examples.linux/50-stun4all',
+                          'https://github.com/bol-van/zapret/tree/master/init.d/custom.d.examples.linux'
+                        ],
 
     ipsetDir          : '/opt/zapret/ipset',
     updListsPath      : '/opt/zapret/update-lists.sh',
