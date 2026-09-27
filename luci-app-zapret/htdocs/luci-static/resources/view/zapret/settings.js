@@ -272,8 +272,6 @@ return view.extend({
         });
         let name = input(editing ? editing.id : '', 'my_strategy');
         name.disabled = !!editing;
-        let ptcp = input(base.meta.PORTS_TCP, '80,443');
-        let pudp = input(base.meta.PORTS_UDP, '443');
         let body = E('textarea', {
             'class': 'cbi-input-textarea',
             'style': 'width:100% !important',
@@ -292,16 +290,10 @@ return view.extend({
 
         let save = async () => {
             let id = editing ? editing.id : name.value.trim();
-            let meta = {
-                NAME: editing ? (editing.meta.NAME || id) : id,
-                PORTS_TCP: ptcp.value.trim(),
-                PORTS_UDP: pudp.value.trim(),
-            };
+            /* no ports: they are taken from its --filter-tcp/--filter-udp when it is applied */
+            let meta = { NAME: editing ? (editing.meta.NAME || id) : id };
             if (!editing && this.findPreset(id)) {
                 return fail(_('A strategy named "%s" already exists').format(id));
-            }
-            if (!meta.PORTS_TCP && !meta.PORTS_UDP) {
-                return fail(_('Enter the TCP or UDP ports of the strategy'));
             }
             let text = body.value.replace(/\r/g, '').trim()
                            .replace(/^--comment=\S*/m, () => '--comment=preset_' + id);
@@ -333,8 +325,6 @@ return view.extend({
                     _('Based on %s').format(base.meta.NAME || base.id),
                 ]),
                 editorRow(_('Name'), name),
-                editorRow(_('TCP ports'), ptcp),
-                editorRow(_('UDP ports'), pudp),
                 body,
                 error,
             ]),
@@ -467,11 +457,16 @@ return view.extend({
         let OPT = N + '_OPT';
         let m, s, o;
 
-        /* NFQWS_OPT or the ports changed by hand are no longer what the picked strategy renders */
-        let unpick = (section_id, name, value) => {
-            if (value !== uci.get(tools.appName, section_id, name)) {
+        /* NFQWS_OPT changed by hand is no longer what the picked strategy renders.
+           The ports follow it, as they follow a strategy picked on the tab. */
+        let storeOpt = (section_id, value) => {
+            if (value !== uci.get(tools.appName, section_id, OPT)) {
                 uci.unset(tools.appName, section_id, 'NFQWS_PRESET');
             }
+            let ports = presets.ports(value);
+            presets.setIfChanged(N + '_PORTS_TCP', ports.tcp);
+            presets.setIfChanged(N + '_PORTS_UDP', ports.udp);
+            return uci.set(tools.appName, section_id, OPT, value);
         };
 
         m = new form.Map(tools.appName);
@@ -532,16 +527,16 @@ return view.extend({
         o.validate = function(section_id, value) { return true; };
         o.write = function(section_id, value) { return form.Value.prototype.write.call(this, section_id, (value == null || value.trim() == '') ? "\t" : value.trim()); };
 
-        [ 'PORTS_TCP', 'PORTS_UDP', 'TCP_PKT_OUT', 'TCP_PKT_IN', 'UDP_PKT_OUT', 'UDP_PKT_IN' ].forEach((name) => {
+        /* read only: see presets.ports() */
+        [ [ 'PORTS_TCP', '--filter-tcp' ], [ 'PORTS_UDP', '--filter-udp' ] ].forEach(([ name, filter ]) => {
+            o = s.option(form.DummyValue, N + '_' + name, N + '_' + name);
+            o.description = _('Taken from %s of the strategy').format(filter);
+        });
+
+        [ 'TCP_PKT_OUT', 'TCP_PKT_IN', 'UDP_PKT_OUT', 'UDP_PKT_IN' ].forEach((name) => {
             o = s.option(form.Value, N + '_' + name, N + '_' + name);
             o.rmempty  = false;
             o.datatype = 'string';
-            if (name == 'PORTS_TCP' || name == 'PORTS_UDP') {
-                o.write = function(section_id, value) {
-                    unpick(section_id, this.option, value);
-                    return form.Value.prototype.write.call(this, section_id, value);
-                };
-            }
         });
 
         [ 'PORTS_TCP_KEEPALIVE', 'PORTS_UDP_KEEPALIVE' ].forEach((name) => {
@@ -577,12 +572,10 @@ return view.extend({
             value = value.trim().replace(/\r/g, '');
             value = (value != '') ? '\n' + value + '\n' : '\t';
             value = value.replace(/˂/g, '<').replace(/˃/g, '>');
-            unpick(section_id, OPT, value);
-            return uci.set(tools.appName, section_id, OPT, value);
+            return storeOpt(section_id, value);
         };
         o.remove = function(section_id) {
-            unpick(section_id, OPT, '\t');
-            return uci.set(tools.appName, section_id, OPT, '\t');
+            return storeOpt(section_id, '\t');
         };
 
         return m.render().then((node) => {

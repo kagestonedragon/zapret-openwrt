@@ -112,7 +112,7 @@ check('off: user lists kept', r1.indexOf('--hostlist=/opt/zapret/ipset/zapret-ho
 check('off: starts with comment', r1.indexOf('--comment=preset_general') === 0, r1.slice(0, 40));
 check('off: validate clean', P.validateBody(r1) === null, P.validateBody(r1));
 
-var po = P.renderPorts(p.meta, knobs('off', 'none'));
+var po = P.ports(r1);
 check('off: tcp ports', po.tcp === '80,443,2053,2083,2087,2096,8443', po.tcp);
 check('off: udp ports', po.udp === '443,19294-19344,50000-50100', po.udp);
 
@@ -133,9 +133,9 @@ check('all+loaded: game fake',    r3.indexOf('/flowseal/quic_y.bin') >= 0);
 check('all+loaded: no placeholders', !/<[A-Z_]+>/.test(r3));
 check('all+loaded: validate clean', P.validateBody(r3) === null, P.validateBody(r3));
 
-var pn = P.renderPorts(p.meta, knobs('all', 'loaded'));
-check('all: tcp ports', pn.tcp === '80,443,2053,2083,2087,2096,8443,1024-65535', pn.tcp);
-check('all: udp ports', pn.udp === '443,19294-19344,50000-50100,1024-65535', pn.udp);
+var pn = P.ports(r3);
+check('all: tcp ports', pn.tcp === '80,443,1024-65535', pn.tcp);
+check('all: udp ports', pn.udp === '443,1024-65535', pn.udp);
 
 // --- IPSet any: no include ipset, which nfqws takes as every address
 var r4 = P.render(p.body, knobs('all', 'any'), lists);
@@ -150,7 +150,7 @@ check('all+any: no blank lines left', P.sections(r4).every(function(ls) {
 var r5 = P.render(p.body, knobs('tcp', 'loaded'), lists);
 check('tcp: has filter-tcp range', r5.indexOf('--filter-tcp=1024-65535') >= 0);
 check('tcp: no filter-udp range',  r5.indexOf('--filter-udp=1024-65535') < 0);
-check('tcp: udp ports unchanged',  P.renderPorts(p.meta, knobs('tcp', 'loaded')).udp === '443,19294-19344,50000-50100');
+check('tcp: udp ports unchanged',  ports(r5) === '80,443,1024-65535 / 443,19294-19344,50000-50100', ports(r5));
 
 // --- hand-edited templates
 var hand = '--filter-tcp=443 --ipset=<IPSET> --dpi-desync=fake';
@@ -212,8 +212,27 @@ check('allow HOSTLIST',  P.validateBody('--filter-tcp=443 <HOSTLIST>') === null)
 check('template: placeholders allowed',    P.validateTemplate(p.body) === null, P.validateTemplate(p.body));
 check('template: unknown placeholder',     P.validateTemplate('--a=<FOO>') !== null);
 check('template: forbidden character',     P.validateTemplate('--a=$x') !== null);
-check('ports: lists and ranges',           P.validatePorts('80,443,50000-50100') === null && P.validatePorts('') === null);
-check('ports: refused',                    P.validatePorts('80;443') !== null && P.validatePorts('70000') !== null && P.validatePorts('500-100') !== null);
+
+// --- the ports the firewall sends to nfqws, from the filters of the strategy
+function ports(text) { var r = P.ports(text); return r.tcp + ' / ' + r.udp; }
+var own = '--filter-tcp=443\n--hostlist=/opt/zapret/ipset/claude-youtube-domains.txt\n--dpi-desync=multidisorder\n\n--new\n\n'
+        + '--filter-udp=443\n--filter-l7=quic\n--dpi-desync=fake\n\n--new\n\n'
+        + '--filter-tcp=443,2053,2083,2087,2096,8443\n--dpi-desync=multisplit\n\n--new\n\n'
+        + '--filter-udp=19294-19344,50000-50100\n--filter-l7=discord,stun\n--dpi-desync=fake';
+check('ports: union of the sections',      ports(own) === '443,2053,2083,2087,2096,8443 / 443,19294-19344,50000-50100', ports(own));
+check('ports: overlaps and neighbours merged', ports('--filter-tcp=443,80,1024-65535,2053 --new --filter-tcp=81') === '80-81,443,1024-65535 / ', ports('--filter-tcp=443,80,1024-65535,2053 --new --filter-tcp=81'));
+// a section without port filters rides on the ports the others name, as under --wf-tcp/--wf-udp
+check('ports: no filter takes the named ones', ports('--filter-l7=quic --new --filter-udp=443 --new --filter-tcp=80') === '80 / 443', ports('--filter-l7=quic --new --filter-udp=443 --new --filter-tcp=80'));
+check('ports: no filter, nothing named',   ports('--dpi-desync=fake') === '1-65535 / 1-65535' && ports('--filter-tcp=443 --new --dpi-desync=fake') === '443 / 1-65535');
+check('ports: no filter, l7 picks the protocol', ports('--filter-l7=quic --dpi-desync=fake') === ' / 1-65535' && ports('--filter-l7=tls,http') === '1-65535 / '
+      && ports('--filter-l7=discord,stun --new --filter-tcp=443') === '443 / 1-65535', ports('--filter-l7=discord,stun --new --filter-tcp=443'));
+check('ports: no filter, l7 of either kind', ports('--filter-l7=quic,unknown') === '1-65535 / 1-65535' && ports('--filter-l7=newproto') === '1-65535 / 1-65535');
+check('ports: star and negation',          ports('--filter-tcp=* --new --filter-udp=~0-1023,~5000') === '1-65535 / 1-65535' && ports('--filter-udp=~443') === ' / 1-442,444-65535', ports('--filter-udp=~443'));
+check('ports: 0 is no port',               ports('--filter-tcp=0 --filter-udp=~0') === ' / ' && ports('--filter-tcp=0-80') === '1-80 / ');
+check('ports: --skip sections left out',   ports('--filter-tcp=80 --new --filter-tcp=443 --skip') === '80 / ');
+check('ports: comments left out',          ports('--filter-tcp=80\n#--filter-tcp=443\n# --new\n--dpi-desync=fake') === '80 / ', ports('--filter-tcp=80\n#--filter-tcp=443\n# --new\n--dpi-desync=fake'));
+check('ports: repeated and spaced filters', ports('--filter-tcp=80 --filter-tcp 443 --filter-udp=bad') === '80,443 / ', ports('--filter-tcp=80 --filter-tcp 443 --filter-udp=bad'));
+check('ports: nothing for an empty strategy', ports('') === ' / ' && ports('\t') === ' / ' && ports('\n--new\n') === ' / ');
 check('name ok',         P.validateName('my_preset-1.v2') === null);
 check('name rejects /',  P.validateName('../../etc/passwd') !== null);
 check('name rejects sp', P.validateName('my preset') !== null);
@@ -251,6 +270,10 @@ for (var i = 0; i < ids.length; i++) {
         if ((pp.body.indexOf('<GF_UDP>') >= 0 && udp_on) != (out.indexOf('--filter-udp=1024-65535') >= 0)) sweepFail('game udp ' + tag);
         if ((ipsets[s2] == 'loaded') != (out.indexOf('--ipset=') >= 0)) sweepFail('ipset ' + tag);
         if ((ipsets[s2] == 'none') != (out.indexOf('--ipset-ip=') >= 0)) sweepFail('ipset-ip ' + tag);
+        // the ports of --wf-tcp/--wf-udp on Windows, where the game filter adds its range
+        var wf = ports('--filter-tcp=' + pp.meta.PORTS_TCP + (tcp_on ? ',1024-65535' : '')
+                       + ' --new --filter-udp=' + pp.meta.PORTS_UDP + (udp_on ? ',1024-65535' : ''));
+        if (ports(out) !== wf) sweepFail('ports ' + tag + ': ' + ports(out) + ', Windows ' + wf);
     }
 }
 
@@ -273,8 +296,8 @@ stageWith({ IPSET_MODE: 'none' }, allFiles(), tab('general', 'all', 'loaded')).t
     check('stage: ipset-all from Host lists', opt.indexOf('--ipset=/opt/zapret/ipset/flowseal-ipset-all.txt') >= 0);
     check('stage: default game fake', opt.indexOf('/flowseal/quic_initial_4pda_to.bin') >= 0);
     check('stage: stored as the NFQWS_OPT editor stores it', /^\n--comment=preset_general\n[\s\S]*[^\n]\n$/.test(opt));
-    check('stage: tcp ports', store.NFQWS_PORTS_TCP === '80,443,2053,2083,2087,2096,8443,1024-65535', store.NFQWS_PORTS_TCP);
-    check('stage: udp ports', store.NFQWS_PORTS_UDP === '443,19294-19344,50000-50100,1024-65535', store.NFQWS_PORTS_UDP);
+    check('stage: tcp ports', store.NFQWS_PORTS_TCP === '80,443,1024-65535', store.NFQWS_PORTS_TCP);
+    check('stage: udp ports', store.NFQWS_PORTS_UDP === '443,1024-65535', store.NFQWS_PORTS_UDP);
     var missing = allFiles(); delete missing['flowseal-general.txt'];
     return stageWith({ IPSET_MODE: 'none' }, missing, tab('general', 'all', 'loaded')).then(function() {
         check('stage: refuses a list that is not downloaded', false, 'resolved');

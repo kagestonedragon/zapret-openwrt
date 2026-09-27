@@ -66,6 +66,8 @@ GAMEFILTER_MAP = {
 
 # WinDivert-only capture filter; has no nfqws counterpart. Its role is played by
 # NFQWS_PORTS_TCP / NFQWS_PORTS_UDP, so it is lifted out of the body into metadata.
+# The GUI takes those from the --filter-tcp/--filter-udp of the strategy; the metadata
+# is what tools/test-presets.js checks them against.
 WF_OPTS = ('--wf-tcp=', '--wf-udp=')
 
 # /opt/zapret/config is sourced as root and rewritten with sed; these characters either

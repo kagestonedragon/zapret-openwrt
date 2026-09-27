@@ -30,8 +30,10 @@ CI job would run.
 * Drops the `.bat` boilerplate and joins the `^`-continued `winws.exe` argument list,
   undoing cmd's caret escaping (`^!` → `!`).
 * `--wf-tcp` / `--wf-udp` are WinDivert-only. They have no nfqws counterpart, so their ports
-  move out of the strategy body into the preset's `PORTS_TCP` / `PORTS_UDP` metadata, which
-  the GUI writes to `NFQWS_PORTS_TCP` / `NFQWS_PORTS_UDP`.
+  move out of the strategy body into the preset's `PORTS_TCP` / `PORTS_UDP` metadata. It is
+  kept for reference: the GUI takes `NFQWS_PORTS_TCP` / `NFQWS_PORTS_UDP` from the
+  `--filter-tcp` / `--filter-udp` of the strategy it applies, and `tools/test-presets.js`
+  checks that every preset comes to the same ports as on Windows.
 * The lists Flowseal maintains are not copied. `%LISTS%list-general.txt`, `list-google.txt`,
   `list-exclude.txt`, `ipset-exclude.txt` and `ipset-all.txt` become placeholders, filled in
   with the files of the matching entries on the Host lists tab, which downloads them from the

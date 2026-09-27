@@ -18,6 +18,10 @@
  *     --filter-udp=443
  *     ...
  *
+ * PORTS_TCP/PORTS_UDP are the --wf-tcp/--wf-udp of the Windows original, kept for reference.
+ * The ports the firewall sends to nfqws are taken from the strategy itself, see ports(), and
+ * tools/test-presets.js checks that it comes to the same ones.
+ *
  * The body may carry placeholders that the filters of the tab resolve when it is saved.
  * They never reach NFQWS_OPT - what gets stored in uci is always fully rendered text,
  * because upstream zapret only expands <HOSTLIST> and <HOSTLIST_NOAUTO> itself and would
@@ -64,6 +68,39 @@ const NATIVE_MARKERS = [ 'HOSTLIST', 'HOSTLIST_NOAUTO' ];
 
 // the ones a preset file may carry on top of them
 const TEMPLATE_MARKERS = [ 'GF_TCP', 'GF_UDP', 'FAKE_DISCORD', 'FAKE_GAME' ].concat(Object.keys(LIST_ROLES));
+
+/* what nfqws tells each --filter-l7 protocol by; 'unknown' and names not here can be either */
+const L7_PROTO = { http: 'tcp', tls: 'tcp', quic: 'udp', wireguard: 'udp', dht: 'udp', discord: 'udp', stun: 'udp' };
+
+/* one item of --filter-tcp/--filter-udp, '[~]port1[-port2]' or '*', as [ [ from, to ], ... ] */
+function portRanges(item) {
+    let neg = item.startsWith('~');
+    let m = (neg ? item.slice(1) : item).match(/^(?:(\*)|(\d+)(?:-(\d+))?)$/);
+    if (!m) {
+        return [ ];     /* nfqws does not start with it */
+    }
+    let from = m[1] ? 1 : Number(m[2]);
+    let to = m[1] ? 65535 : Number(m[3] || m[2]);
+    if (to > 65535 || from > to || to == 0) {
+        return [ ];     /* the same, or "0", which nfqws takes as no port at all */
+    }
+    from = Math.max(from, 1);
+    return (neg ? [ [ 1, from - 1 ], [ to + 1, 65535 ] ] : [ [ from, to ] ]).filter(r => r[0] <= r[1]);
+}
+
+/* sorted, overlapping and adjacent ranges merged: '80,443,1024-65535' */
+function formatPorts(ranges) {
+    let out = [ ];
+    ranges.slice().sort((a, b) => a[0] - b[0]).forEach(([ from, to ]) => {
+        let last = out[out.length - 1];
+        if (last && from <= last[1] + 1) {
+            last[1] = Math.max(last[1], to);
+        } else {
+            out.push([ from, to ]);
+        }
+    });
+    return out.map(([ from, to ]) => (from == to) ? String(from) : from + '-' + to).join(',');
+}
 
 return baseclass.extend({
     __init__: function() {
@@ -253,16 +290,62 @@ return baseclass.extend({
         return out;
     },
 
-    renderPorts: function(meta, knobs) {
-        let add = (base, on) => {
-            base = (base || '').trim();
-            if (!on) return base;
-            return base ? base + ',' + GAME_PORTS : GAME_PORTS;
-        };
-        return {
-            tcp: add(meta.PORTS_TCP, knobs.game == 'all' || knobs.game == 'tcp'),
-            udp: add(meta.PORTS_UDP, knobs.game == 'all' || knobs.game == 'udp'),
-        };
+    /*
+     * NFQWS_PORTS_TCP/UDP for a rendered strategy.
+     *
+     * The firewall sends nfqws the packets to these ports only, and --filter-tcp/--filter-udp
+     * pick the section for the ones it gets, so they are the ports the filters name. A port
+     * no section is for would only pass through nfqws untouched. The filters are read the way
+     * nfqws reads them: '~' negates an item, '*' is every port, a section with --filter-tcp
+     * alone is not for UDP and the other way round, and a --skip section is not used.
+     *
+     * A section with neither filter is for the ports the other sections name, as it is with
+     * ports set by hand and with --wf-tcp/--wf-udp on Windows (general (EXP) has one). Only a
+     * protocol no section names ports for gets all of them then, if its --filter-l7 allows it.
+     *
+     * Lines starting with '#' are dropped, as sync_config.sh drops them from NFQWS_OPT.
+     */
+    ports: function(text) {
+        let sections = [ [ ] ];
+        (text || '').split('\n').filter(line => !line.startsWith('#')).join(' ')
+            .split(/\s+/).filter(tok => tok).forEach(tok => {
+                if (tok == '--new') {
+                    sections.push([ ]);
+                } else {
+                    sections[sections.length - 1].push(tok);
+                }
+            });
+        let found = { tcp: [ ], udp: [ ] };
+        let named = { tcp: false, udp: false };
+        let unnamed = { tcp: false, udp: false };   /* a section is for it without naming ports */
+        sections.forEach(toks => {
+            if (!toks.length || toks.indexOf('--skip') >= 0) {
+                return;
+            }
+            let items = { tcp: null, udp: null, l7: null };
+            toks.forEach((tok, i) => {
+                /* "--filter-tcp=443", or "--filter-tcp 443", which getopt takes as well */
+                let m = tok.match(/^--filter-(tcp|udp|l7)(=(.*))?$/);
+                if (m) {
+                    let value = m[2] ? m[3] : (toks[i + 1] || '');
+                    items[m[1]] = (items[m[1]] || [ ]).concat(value.split(','));
+                }
+            });
+            for (let proto in found) {
+                if (items[proto]) {
+                    named[proto] = true;
+                    items[proto].forEach(item => found[proto].push(...portRanges(item)));
+                } else if (!items.tcp && !items.udp) {
+                    unnamed[proto] = unnamed[proto] || !items.l7
+                        || items.l7.some(name => (L7_PROTO[name] || proto) == proto);
+                }
+            }
+        });
+        let out = { };
+        for (let proto in found) {
+            out[proto] = formatPorts((!named[proto] && unnamed[proto]) ? [ [ 1, 65535 ] ] : found[proto]);
+        }
+        return out;
     },
 
     /* ------------------------------------------------------------------ validation */
@@ -303,18 +386,6 @@ return baseclass.extend({
             }
         }
         return null;
-    },
-
-    /* ports and port ranges, comma separated; empty is allowed */
-    validatePorts: function(text) {
-        if (!text) {
-            return null;
-        }
-        let ok = /^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(text) && text.split(',').every(part => {
-            let [ lo, hi ] = part.split('-').map(Number);
-            return lo >= 1 && lo <= 65535 && (hi == null || (hi >= lo && hi <= 65535));
-        });
-        return ok ? null : _('Ports must be a comma separated list of ports and ranges, for example %s').format('443,50000-50100');
     },
 
     validateName: function(name) {
@@ -439,7 +510,7 @@ return baseclass.extend({
                                 + '\n- ' + problems.join('\n- '));
             }
             let N = (this.appName == 'zapret2') ? 'NFQWS2' : 'NFQWS';
-            let ports = this.renderPorts(item.meta, knobs);
+            let ports = this.ports(opt);
             this.storeKnobs(knobs);
             this.setIfChanged(N + '_OPT', '\n' + opt.trim() + '\n');
             this.setIfChanged(N + '_PORTS_TCP', ports.tcp);
@@ -494,8 +565,7 @@ return baseclass.extend({
     },
 
     savePreset: function(name, meta, body) {
-        let err = this.validateName(name) || this.validateTemplate(body)
-               || this.validatePorts(meta.PORTS_TCP) || this.validatePorts(meta.PORTS_UDP);
+        let err = this.validateName(name) || this.validateTemplate(body);
         if (err) {
             return Promise.reject(new Error(err));
         }
